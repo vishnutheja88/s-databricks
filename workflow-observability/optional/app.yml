@@ -4,6 +4,7 @@ resources:
       name: workflow-obs-${bundle.target}
       description: Workflow cost, reliability and optimization insights across workspaces
       source_code_path: ../app          # runtime config lives in app/app.yaml
+      # OPTIONAL: deployed only when "optional/app.yml" is listed under include in databricks.yml
       resources:
         - name: sql-warehouse
           sql_warehouse:

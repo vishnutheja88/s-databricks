@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS ${catalog}.silver.fact_usage_cost (
   dbus                   DOUBLE,
   list_cost              DOUBLE,
   effective_cost         DOUBLE
-) CLUSTER BY (workspace_id, usage_date);
+) CLUSTER BY (workspace_id, usage_date)
+COMMENT 'One row per billing record for monitored workspaces, priced at list and effective (discounted) cost.';
 
 MERGE INTO ${catalog}.silver.fact_usage_cost t
 USING (
@@ -67,14 +68,18 @@ WHEN MATCHED THEN UPDATE SET *
 WHEN NOT MATCHED THEN INSERT *;
 
 -- ---------- latest job definitions ----------
-CREATE OR REPLACE TABLE ${catalog}.silver.dim_job AS
+CREATE OR REPLACE TABLE ${catalog}.silver.dim_job
+COMMENT 'Latest definition of each workflow (job_id, job_name) per workspace.'
+AS
 SELECT workspace_id, job_id, name AS job_name, creator_id, tags, change_time, delete_time
 FROM system.lakeflow.jobs
 WHERE workspace_id IN (SELECT workspace_id FROM ${catalog}.config.workspaces WHERE enabled)
 QUALIFY ROW_NUMBER() OVER (PARTITION BY workspace_id, job_id ORDER BY change_time DESC) = 1;
 
 -- ---------- latest cluster definitions (last 90d) ----------
-CREATE OR REPLACE TABLE ${catalog}.silver.dim_cluster AS
+CREATE OR REPLACE TABLE ${catalog}.silver.dim_cluster
+COMMENT 'Latest definition of each cluster seen in the last 90 days.'
+AS
 SELECT workspace_id, cluster_id, cluster_name, cluster_source, owned_by, dbr_version,
        driver_node_type, worker_node_type, worker_count,
        min_autoscale_workers, max_autoscale_workers, change_time
@@ -100,7 +105,8 @@ CREATE TABLE IF NOT EXISTS ${catalog}.silver.fact_job_run (
   run_as           STRING,
   list_cost        DOUBLE,
   effective_cost   DOUBLE
-) CLUSTER BY (workspace_id, start_time);
+) CLUSTER BY (workspace_id, start_time)
+COMMENT 'One row per workflow run: timing, duration_min, result_state, termination_code, repairs and cost.';
 
 MERGE INTO ${catalog}.silver.fact_job_run t
 USING (
@@ -161,7 +167,8 @@ CREATE TABLE IF NOT EXISTS ${catalog}.silver.fact_task_run (
   queue_s          DOUBLE,
   exec_s           DOUBLE,
   compute_ids      ARRAY<STRING>
-) CLUSTER BY (workspace_id, start_time);
+) CLUSTER BY (workspace_id, start_time)
+COMMENT 'One row per task run inside a workflow run: setup, queue and execution seconds.';
 
 MERGE INTO ${catalog}.silver.fact_task_run t
 USING (
@@ -201,7 +208,8 @@ CREATE TABLE IF NOT EXISTS ${catalog}.silver.fact_cluster_util (
   peak_cpu_pct    DOUBLE,
   avg_mem_pct     DOUBLE,
   avg_io_wait_pct DOUBLE
-) CLUSTER BY (workspace_id, util_date);
+) CLUSTER BY (workspace_id, util_date)
+COMMENT 'Daily average/peak CPU and memory utilization of worker nodes per cluster.';
 
 MERGE INTO ${catalog}.silver.fact_cluster_util t
 USING (

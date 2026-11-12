@@ -1,0 +1,10 @@
+# AI/BI (Lakeview) dashboard. Queries in the .lvdash.json use schema.table
+# (e.g. gold.findings); dataset_catalog points them at this target's catalog.
+resources:
+  dashboards:
+    workflow_observability:
+      display_name: "Workflow Observability (${bundle.target})"
+      file_path: ../src/dashboards/workflow_observability.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      dataset_catalog: ${var.catalog}
+      embed_credentials: false        # viewers query with their own permissions

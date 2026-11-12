@@ -1,0 +1,62 @@
+{
+  "title": "Workflow Observability",
+  "description": "Ask about Databricks workflow (Lakeflow Jobs) cost, failures and optimization opportunities across workspaces.",
+  "tables": [
+    {
+      "identifier": "${catalog}.gold.job_summary_30d",
+      "description": "One row per workflow (job) over the last 30 days: runs, success %, cost, cost per run, failed-run cost, week-over-week growth, startup overhead, CPU utilization, all-purpose compute usage.",
+      "example_value_columns": ["workspace_name", "environment", "owner_team", "job_name", "run_as"]
+    },
+    {
+      "identifier": "${catalog}.gold.findings",
+      "description": "Optimization findings: one row per workflow that breaches a rule (LOW_CPU, HIGH_FAILURE_COST, HIGH_SETUP_OVERHEAD, ALL_PURPOSE_COMPUTE, COST_SPIKE, UNTAGGED_SPEND, LOW_SUCCESS_RATE) with an estimated monthly saving and a recommendation.",
+      "example_value_columns": ["severity", "rule_id", "title", "workspace_name", "owner_team"]
+    },
+    {
+      "identifier": "${catalog}.gold.v_daily_cost",
+      "description": "Daily Databricks spend by workspace, product (JOBS, SQL, ALL_PURPOSE, DLT, ...) and SKU. effective_cost is list cost minus the negotiated discount.",
+      "example_value_columns": ["workspace_name", "billing_origin_product", "sku_name"]
+    },
+    {
+      "identifier": "${catalog}.silver.fact_job_run",
+      "description": "One row per workflow run: start/end time, duration in minutes, result_state, termination_code, repairs and cost.",
+      "example_value_columns": ["result_state", "termination_code", "trigger_type"]
+    },
+    {
+      "identifier": "${catalog}.silver.fact_task_run",
+      "description": "One row per task run inside a workflow run: task_key, result_state, setup/queue/execution seconds.",
+      "example_value_columns": ["task_key", "result_state"]
+    },
+    {
+      "identifier": "${catalog}.silver.dim_job",
+      "description": "Latest definition of each workflow: job_id and job_name per workspace.",
+      "example_value_columns": []
+    },
+    {
+      "identifier": "${catalog}.config.workspaces",
+      "description": "Registry of monitored workspaces with friendly name, environment (prod/staging/dev) and owning team.",
+      "example_value_columns": ["workspace_name", "environment", "owner_team"]
+    }
+  ],
+  "instructions": [
+    "All costs are in USD. Use effective_cost (discounted) unless the user explicitly asks for list price; then use list_cost.",
+    "A 'workflow', 'job' or 'pipeline run' means a Lakeflow Job. Workflow spend is billing_origin_product = 'JOBS' in gold.v_daily_cost.",
+    "Join workflows across tables on BOTH workspace_id and job_id; job_id alone is not unique across workspaces.",
+    "Show workspace_name instead of workspace_id, and job_name instead of job_id, whenever possible.",
+    "A run failed when result_state is FAILED, ERROR or TIMED_OUT. Success rate = SUCCEEDED runs / all finished runs.",
+    "gold.job_summary_30d and gold.findings always cover the last 30 days; for other periods use silver.fact_job_run (start_time) or gold.v_daily_cost (usage_date).",
+    "Estimated savings in gold.findings are rough heuristics for prioritizing work; say so when quoting them.",
+    "'Over-provisioned' means rule LOW_CPU; 'startup overhead' means setup_pct / rule HIGH_SETUP_OVERHEAD; 'all-purpose' means rule ALL_PURPOSE_COMPUTE.",
+    "When asked 'why did cost go up', compare last7_cost vs prev7_cost in gold.job_summary_30d and list the workflows with the largest increase."
+  ],
+  "sample_questions": [
+    "Which 10 workflows cost the most in the last 30 days?",
+    "Why did workflow spend go up last week?",
+    "Which workflows wasted the most money on failed runs?",
+    "Show high-severity findings and their estimated monthly savings by owner team",
+    "Which workflows run on all-purpose clusters?",
+    "What is the daily workflow spend trend for prod workspaces over the last 60 days?",
+    "Which jobs have average CPU below 30%?",
+    "What are the most common termination codes for failed runs this month?"
+  ]
+}

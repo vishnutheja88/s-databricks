@@ -1,15 +1,17 @@
 bundle:
   name: workflow-observability
+  databricks_cli_version: ">=0.281.0"   # alerts v2 + dashboard dataset_catalog
 
 include:
-  - resources/*.yml
+  - resources/*.yml          # collector job, dashboard, alerts (always deployed)
+  # - optional/app.yml       # OPTIONAL: uncomment to also deploy the Databricks App
 
 variables:
   catalog:
     description: Unity Catalog catalog that holds the observability layer
     default: platform_obs
   warehouse_id:
-    description: SQL warehouse the app queries through
+    description: SQL warehouse used by the dashboard, alerts, Genie space (and the optional app)
   lookback_days:
     description: Days reprocessed each collector run (billing corrections land late)
     default: "3"
@@ -22,6 +24,17 @@ variables:
   job_sp:
     description: Service principal application ID the collector runs as (prod)
     default: ""
+  alert_email:
+    description: Email (user) that receives SQL alert notifications
+  failed_runs_threshold:
+    description: Alert when failed workflow runs in the last 24h exceed this
+    default: 5
+  cost_spike_pct:
+    description: Alert when yesterday's workflow spend exceeds the 7-day average by this %
+    default: 50
+  stale_hours:
+    description: Alert when the observability data is older than this many hours
+    default: 12
 
 targets:
   # One "hub" per cloud region. System tables only show workspaces in the
@@ -34,6 +47,7 @@ targets:
     variables:
       catalog: platform_obs_dev
       warehouse_id: <dev-warehouse-id>
+      alert_email: <you@company.com>
 
   prod_us_east_1:
     mode: production
@@ -46,6 +60,7 @@ targets:
       catalog: platform_obs
       warehouse_id: <prod-warehouse-id>
       admin_emails: platform-team@example.com
+      alert_email: <platform-oncall@company.com>
 
   # Copy this block for each extra region
   # prod_us_west_2:

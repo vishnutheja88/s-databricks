@@ -3,7 +3,9 @@
 -- =============================================================
 
 -- Daily cost by workspace / product / SKU (the app filters this)
-CREATE OR REPLACE VIEW ${catalog}.gold.v_daily_cost AS
+CREATE OR REPLACE VIEW ${catalog}.gold.v_daily_cost
+COMMENT 'Daily Databricks spend (USD) by workspace, product and SKU. effective_cost = list cost minus negotiated discount.'
+AS
 SELECT u.usage_date, u.workspace_id,
        COALESCE(w.workspace_name, u.workspace_id) AS workspace_name,
        u.billing_origin_product, u.sku_name, u.is_serverless,
@@ -13,7 +15,9 @@ LEFT JOIN ${catalog}.config.workspaces w USING (workspace_id)
 GROUP BY ALL;
 
 -- One row per job with everything the rules need (last 30 days)
-CREATE OR REPLACE TABLE ${catalog}.gold.job_summary_30d AS
+CREATE OR REPLACE TABLE ${catalog}.gold.job_summary_30d
+COMMENT 'One row per workflow (job) for the last 30 days: runs, success %, cost, failed-run cost, WoW growth, startup overhead, CPU, all-purpose usage.'
+AS
 WITH runs AS (
   SELECT workspace_id, job_id,
          COUNT(*)                                                    AS runs,
@@ -104,7 +108,9 @@ LEFT JOIN ${catalog}.silver.dim_job j USING (workspace_id, job_id)
 LEFT JOIN ${catalog}.config.workspaces w USING (workspace_id);
 
 -- Findings: one row per (job, rule) breach. Savings are rough estimates.
-CREATE OR REPLACE TABLE ${catalog}.gold.findings AS
+CREATE OR REPLACE TABLE ${catalog}.gold.findings
+COMMENT 'Optimization findings: one row per workflow breaching a rule, with severity, estimated monthly savings (heuristic) and recommendation.'
+AS
 WITH m AS (
   -- one candidate row per (job, rule) with the metric the rule checks
   SELECT s.*, f.rid, f.metric_value, f.est

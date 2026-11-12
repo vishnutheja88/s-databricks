@@ -20,43 +20,59 @@ write 'workflow-observability/README.md' <<'WFOBS_EOF'
 # Workflow Observability for Databricks
 
 Cost, reliability and optimization insights for Lakeflow Jobs (workflows) across
-any number of workspaces, delivered as a Databricks App plus a scheduled collector
-job, packaged as one Databricks Asset Bundle.
+any number of workspaces, built on system tables and packaged as one Databricks
+Asset Bundle.
 
-**New here? Follow [STEP_BY_STEP.md](STEP_BY_STEP.md).** No clone access? Use `bootstrap.sh` at the repo root to recreate this folder.
+**New here? Follow [STEP_BY_STEP.md](STEP_BY_STEP.md).** No clone access? Use
+`bootstrap.sh` at the repo root to recreate this folder.
+
+## What you get
+
+| Component | Status | What it's for |
+|---|---|---|
+| Collector job | core | builds silver/gold tables from `system.billing`, `system.lakeflow`, `system.compute` every 4h |
+| AI/BI dashboard | core | Overview · Workflows · Findings · Reliability pages |
+| SQL alerts | core | spend spike, failed runs, high-severity findings, stale data |
+| Genie space | core | plain-English questions over the gold/silver tables |
+| Databricks App | **optional** | interactive admin UI (edit workspaces/rules, run collector) |
 
 ## How it scales to N workspaces
 
-System tables are account-wide **per cloud region**. One "hub" deployment per region
-sees every workspace in that region:
+System tables are account-wide **per cloud region**. One "hub" deployment per
+region sees every workspace in that region:
 
 1. The collector auto-discovers workspaces from `system.billing.usage` into
    `config.workspaces`.
 2. New workspaces are monitored immediately (`auto_enable_workspaces=true`) or
-   wait for an admin to enable them on the app's **Workspaces** page.
-3. More regions = add a bundle target (`prod_<region>`) and a matrix entry in CI.
+   wait for an admin to set `enabled = true`.
+3. More regions = add a bundle target (`prod_<region>`) and a CI matrix entry.
 
 No per-workspace deployment is needed.
 
 ## Layout
 
 ```
-databricks.yml              bundle + targets (one per regional hub)
-resources/collector_job.yml serverless job: setup -> silver -> gold (every 4h)
-resources/app.yml           Databricks App + its warehouse/job resources
-src/run_sql.py              runs the SQL files with ${catalog} substitution
-src/sql/00_setup.sql        schemas, config tables, rules seed, workspace discovery
-src/sql/10_silver.sql       incremental facts: usage cost, job runs, task runs, utilization
-src/sql/20_gold.sql         daily cost view, job_summary_30d, findings
-app/app.py                  Streamlit app: Overview, Workflows, Findings, Workspaces, Rules
-.github/workflows/deploy.yml validate on PR, deploy hubs on main
+databricks.yml                       bundle, variables, targets (one per regional hub)
+resources/collector_job.yml          serverless job: setup -> silver -> gold
+resources/dashboard.yml              AI/BI dashboard resource
+resources/alerts.yml                 4 SQL alerts (v2)
+optional/app.yml                     Databricks App (enable via include in databricks.yml)
+src/run_sql.py                       runs the SQL files with ${catalog} substitution
+src/sql/00_setup.sql                 schemas, config tables, rules seed, workspace discovery
+src/sql/10_silver.sql                incremental facts: usage cost, job runs, task runs, utilization
+src/sql/20_gold.sql                  daily cost view, job_summary_30d, findings
+src/dashboards/*.lvdash.json         dashboard definition
+src/genie/genie_space.json           Genie tables, instructions, sample questions
+src/genie/deploy_genie.py            create/update the Genie space (idempotent)
+app/                                 optional Streamlit app
+.github/workflows/deploy.yml         validate on PR, deploy hubs on main
 ```
 
 ## Data model (catalog `platform_obs`)
 
 | Schema | Object | Grain |
 |---|---|---|
-| config | workspaces, rules, settings | editable from the app |
+| config | workspaces, rules, settings | editable (SQL or the optional app) |
 | silver | fact_usage_cost | billing record |
 | silver | fact_job_run | job run |
 | silver | fact_task_run | task run |
@@ -66,50 +82,51 @@ app/app.py                  Streamlit app: Overview, Workflows, Findings, Worksp
 | gold | job_summary_30d | job |
 | gold | findings | job × rule breach |
 
-## Deploy
+## Quick deploy (details in STEP_BY_STEP.md)
 
-1. **Fill in `databricks.yml`**: hub host, `warehouse_id`, `job_sp`, `admin_emails`.
-2. **Grants** (run once as a metastore/account admin):
-   ```sql
-   -- collector service principal
-   GRANT USE CATALOG ON CATALOG system TO `<job-sp>`;
-   GRANT USE SCHEMA, SELECT ON SCHEMA system.billing  TO `<job-sp>`;
-   GRANT USE SCHEMA, SELECT ON SCHEMA system.lakeflow TO `<job-sp>`;
-   GRANT USE SCHEMA, SELECT ON SCHEMA system.compute  TO `<job-sp>`;
-   GRANT USE SCHEMA, SELECT ON SCHEMA system.access   TO `<job-sp>`;  -- optional: workspace names
-   CREATE CATALOG IF NOT EXISTS platform_obs;
-   GRANT ALL PRIVILEGES ON CATALOG platform_obs TO `<job-sp>`;
+```bash
+databricks bundle validate -t dev
+databricks bundle deploy   -t dev                                  # job + dashboard + alerts
+databricks bundle run collector -t dev --params lookback_days=90   # first-time backfill
+python src/genie/deploy_genie.py --catalog platform_obs_dev --warehouse-id <id> --title-suffix " (dev)"
+```
 
-   -- app service principal (shown on the app's page after first deploy)
-   GRANT USE CATALOG ON CATALOG platform_obs TO `<app-sp>`;
-   GRANT USE SCHEMA, SELECT ON SCHEMA platform_obs.silver TO `<app-sp>`;
-   GRANT USE SCHEMA, SELECT ON SCHEMA platform_obs.gold   TO `<app-sp>`;
-   GRANT USE SCHEMA, SELECT, MODIFY ON SCHEMA platform_obs.config TO `<app-sp>`;
-   ```
-3. **Deploy and backfill**:
-   ```bash
-   databricks bundle deploy -t dev
-   databricks bundle run collector -t dev --params lookback_days=90
-   databricks bundle run workflow_obs_app -t dev
-   ```
-   After the backfill, the schedule keeps a 3-day rolling window.
+Optional app: uncomment `- optional/app.yml` in `databricks.yml`, then
+`databricks bundle deploy -t dev && databricks bundle run workflow_obs_app -t dev`.
+
+## CI secrets (if you use `.github/workflows/deploy.yml`)
+
+- dev validation: `DEV_DATABRICKS_HOST`, `DEV_DATABRICKS_CLIENT_ID`, `DEV_DATABRICKS_CLIENT_SECRET`
+- per prod environment: `DATABRICKS_HOST`, `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET`
 
 ## Notes
 
-- Cost = list price × (1 − `discount_pct`). Set the discount on the **Rules** page.
+- Cost = list price × (1 − `discount_pct` in `config.settings`).
 - Job cost attribution covers jobs compute and serverless jobs. Tasks on all-purpose
   clusters or SQL warehouses are billed there; the `ALL_PURPOSE_COMPUTE` rule flags them.
 - Estimated savings are heuristics (e.g. 30% of classic cost for low-CPU clusters).
-  Treat them as a way to rank work, not as a commitment.
-- Admin pages are restricted to the `admin_emails` bundle variable (read from the job parameters); with it empty, every app user is an admin.
-- Grant `CAN_USE` on the app to the teams who should see it.
+  Use them to rank work, not as a commitment.
+- The dashboard runs with each viewer's own permissions (`embed_credentials: false`).
+  Viewers need SELECT on the gold/silver/config schemas.
+- A Genie space must have a human owner, so `deploy_genie.py` runs as you, not in CI.
+- Needs Databricks CLI v0.281+ (alerts v2 and dashboard `dataset_catalog`).
 WFOBS_EOF
 
 write 'workflow-observability/STEP_BY_STEP.md' <<'WFOBS_EOF'
 # Step-by-step: build and deploy Workflow Observability
 
-Follow these steps in order on your project laptop. Each step ends with a
-**Check** so you know it worked before moving on.
+What you get:
+
+| Component | Status | Deployed by |
+|---|---|---|
+| Collector job (system tables → silver/gold) | **core** | bundle |
+| AI/BI dashboard (Overview, Workflows, Findings, Reliability) | **core** | bundle |
+| SQL alerts (spend spike, failed runs, high findings, stale data) | **core** | bundle |
+| Genie space (ask questions in plain English) | **core** | `src/genie/deploy_genie.py` |
+| Databricks App (interactive admin UI) | optional | bundle, when enabled |
+
+Follow the steps in order. Each step ends with a **Check** so you know it
+worked before moving on.
 
 ---
 
@@ -117,14 +134,15 @@ Follow these steps in order on your project laptop. Each step ends with a
 
 | Need | Why | Who usually has it |
 |---|---|---|
-| Databricks CLI **v0.250+** (`databricks -v`) | deploys the bundle | you (install from Databricks docs) |
-| A "hub" workspace in the region you monitor | runs the job and the app | platform team |
-| A SQL warehouse ID (serverless preferred) | the app queries through it | workspace admin |
+| Databricks CLI **v0.281+** (`databricks -v`) | deploys job, dashboard and alerts | you |
+| Python 3.10+ with `pip install databricks-sdk` | creates the Genie space | you |
+| A "hub" workspace in the region you monitor | hosts everything | platform team |
+| A SQL warehouse ID (serverless preferred) | dashboard, alerts, Genie | workspace admin |
 | A service principal for the collector job | reads system tables | account admin |
 | Metastore admin (or someone who is) | grants on `system.*` schemas | account admin |
 | Bash: macOS/Linux terminal, WSL, or **Git Bash** on Windows | runs `bootstrap.sh` | you |
 
-> If you can't install the CLI, see **Appendix A: no CLI on the laptop**.
+> No CLI on the laptop? See **Appendix A**.
 
 ---
 
@@ -141,27 +159,30 @@ You can't clone the repo, so the whole project is packed into one script.
    bash bootstrap.sh
    ```
 
-**Check:** it prints `Done. 13 files created.` and you now have:
+**Check:** it ends with `Done. N files created.` (N matches the number printed
+at the top of `bootstrap.sh`), and you have:
 ```
 workflow-observability/
 ├── databricks.yml
-├── README.md
-├── STEP_BY_STEP.md
-├── app/            app.py, app.yaml, requirements.txt
-├── resources/      app.yml, collector_job.yml
-├── src/            run_sql.py, sql/00_setup.sql, 10_silver.sql, 20_gold.sql
-└── .github/        workflows/deploy.yml   (optional CI)
+├── README.md, STEP_BY_STEP.md
+├── resources/   collector_job.yml, dashboard.yml, alerts.yml
+├── optional/    app.yml                      (only used if you enable the app)
+├── src/
+│   ├── run_sql.py, sql/00_setup.sql, 10_silver.sql, 20_gold.sql
+│   ├── dashboards/workflow_observability.lvdash.json
+│   └── genie/genie_space.json, deploy_genie.py
+├── app/         app.py, app.yaml, requirements.txt   (optional app)
+└── .github/     workflows/deploy.yml                 (optional CI)
 ```
 
-If the count is lower, the copy was cut off. Copy again and make sure the last
+If the count is low, the copy was cut off. Copy again and make sure the last
 line of the script is the one about `.github/`.
 
 On Windows, if you see `$'\r': command not found`, your editor saved Windows line
-endings. Fix it with `sed -i 's/\r$//' bootstrap.sh` and run it again (or set
-your editor to save with LF line endings).
+endings. Fix it with `sed -i 's/\r$//' bootstrap.sh` and run it again.
 
 From here on, work inside `workflow-observability/` and commit it to your
-project repo as you normally would.
+project repo as usual.
 
 ---
 
@@ -173,9 +194,12 @@ Replace every `<...>` placeholder:
 |---|---|---|
 | `<dev-hub-workspace>` | `dbc-1234abcd-5678` | workspace URL |
 | `<dev-warehouse-id>` | `a1b2c3d4e5f67890` | SQL Warehouses → your warehouse → Connection details |
-| `<us-east-1-hub>` / `<prod-warehouse-id>` | same, for prod | |
+| `<you@company.com>` | your email | receives dev alerts |
+| `<us-east-1-hub>`, `<prod-warehouse-id>`, `<platform-oncall@company.com>` | prod values | |
 | `job_sp` | `6f1c...-...` | Account console → Service principals → Application ID |
-| `admin_emails` | `you@company.com` | who may edit workspaces/rules in the app |
+
+Alert thresholds are variables too (`failed_runs_threshold`, `cost_spike_pct`,
+`stale_hours`). Override them per target if needed.
 
 On Azure or GCP, change `.cloud.databricks.com` to your workspace host
 (`adb-xxxx.azuredatabricks.net`, `xxxx.gcp.databricks.com`).
@@ -209,18 +233,23 @@ GRANT USE SCHEMA, SELECT ON SCHEMA system.access   TO `<job-sp>`;   -- optional
 
 CREATE CATALOG IF NOT EXISTS platform_obs_dev;   -- and platform_obs for prod
 GRANT ALL PRIVILEGES ON CATALOG platform_obs_dev TO `<job-sp>`;
+
+-- Who may view the dashboard / use Genie / receive alert data
+GRANT USE CATALOG ON CATALOG platform_obs_dev TO `<viewers-group>`;
+GRANT USE SCHEMA, SELECT ON SCHEMA platform_obs_dev.gold   TO `<viewers-group>`;
+GRANT USE SCHEMA, SELECT ON SCHEMA platform_obs_dev.silver TO `<viewers-group>`;
+GRANT USE SCHEMA, SELECT ON SCHEMA platform_obs_dev.config TO `<viewers-group>`;
 ```
 
-In **dev** the job runs as **you**, so you need the same `system.*` grants yourself
-(or run dev as the service principal too).
+In **dev**, the job, dashboard and alerts run as **you**, so you need the
+`system.*` grants yourself too.
 
 **Check:** this returns rows when run by you or the service principal:
 ```sql
 SELECT COUNT(*) FROM system.billing.usage WHERE usage_date >= current_date() - 7;
 SELECT COUNT(*) FROM system.lakeflow.job_run_timeline WHERE period_start_time >= current_date() - 7;
 ```
-If a system schema is missing, an account admin must enable it first
-(Account console, or `databricks system-schemas enable`).
+If a system schema is missing, an account admin must enable it first.
 
 ---
 
@@ -232,8 +261,12 @@ databricks bundle validate -t dev
 databricks bundle deploy   -t dev
 ```
 
-**Check:** in the workspace you can see the job `[dev <you>] workflow-obs-collector`
-and the app `workflow-obs-dev` (Compute → Apps).
+This deploys the **collector job**, the **dashboard** and the **4 SQL alerts**.
+
+**Check:** in the workspace you see
+- Jobs: `[dev <you>] workflow-obs-collector`
+- Dashboards: `Workflow Observability (dev)`
+- Alerts: four alerts starting with `[wfobs]`
 
 ---
 
@@ -243,7 +276,8 @@ and the app `workflow-obs-dev` (Compute → Apps).
 databricks bundle run collector -t dev --params lookback_days=90
 ```
 
-Usually 5–20 minutes. Later scheduled runs reprocess only the last 3 days.
+Usually 5–20 minutes. Later scheduled runs (every 4 hours) reprocess only the
+last 3 days.
 
 **Check:**
 ```sql
@@ -252,66 +286,120 @@ SELECT COUNT(*) FROM platform_obs_dev.silver.fact_job_run;    -- runs
 SELECT * FROM platform_obs_dev.gold.findings LIMIT 20;        -- optimization findings
 ```
 
-If a task fails, open the run, read the task output, and see **Troubleshooting**.
+---
+
+## Step 7 — Dashboard
+
+1. Open **Dashboards → Workflow Observability (dev)**.
+2. Look at each page: **Overview** (KPIs, daily spend), **Workflows** (top
+   jobs, growth, full table), **Findings** (by rule, savings, to-do table),
+   **Reliability** (outcomes, termination codes, failed-run spend).
+3. Click **Publish**, then **Share** with your viewers group.
+   (Viewers query with their own permissions, so they need the Step 4 viewer grants.)
+4. Optional: **Schedule** an emailed PDF snapshot (e.g. Monday 9:00).
+
+**Check:** the KPI counters show numbers and the charts render.
+
+If you change the dashboard in the UI, pull the change back into code:
+```bash
+databricks bundle generate dashboard --resource workflow_observability --watch
+```
 
 ---
 
-## Step 7 — Start the app and give it access
+## Step 8 — SQL alerts
+
+| Alert | Fires when | Schedule |
+|---|---|---|
+| `[wfobs] Workflow spend spike` | yesterday's JOBS spend > 7-day avg by `cost_spike_pct`% | daily 09:30 |
+| `[wfobs] Failed workflow runs (24h)` | failed runs in 24h > `failed_runs_threshold` | every 4h |
+| `[wfobs] High-severity optimization findings` | any HIGH finding open | Mondays 10:00 |
+| `[wfobs] Observability data is stale` | newest data older than `stale_hours` | every 2h |
+
+1. Open each alert and click **Run now** (or **Evaluate**) once.
+2. To send to Slack/Teams instead of email, create a notification destination
+   (Settings → Notifications), then in `resources/alerts.yml` replace
+   `user_email: ...` with `destination_id: <destination-id>` and redeploy.
+
+**Check:** each alert shows a state of **OK** or **TRIGGERED** (not "Unknown"),
+and a triggered alert sends you an email.
+
+---
+
+## Step 9 — Genie space
+
+A service principal can't own a Genie space, so you create it as yourself with
+a small script. It is idempotent: re-run it after editing `src/genie/genie_space.json`.
 
 ```bash
-databricks bundle run workflow_obs_app -t dev
+pip install databricks-sdk
+python src/genie/deploy_genie.py --catalog platform_obs_dev \
+    --warehouse-id <dev-warehouse-id> --title-suffix " (dev)"
+# add --profile <name> if you use a non-default CLI profile
+# add --dry-run to preview the payload without creating anything
 ```
 
-1. Open Compute → Apps → `workflow-obs-dev` and copy the app's **service principal** name.
-2. Grant it access to the data:
+1. Open the printed link.
+2. Try the sample questions, e.g. *"Which 10 workflows cost the most in the last 30 days?"*
+3. **Share** the space with your viewers group (CAN_RUN).
+4. Improve answers over time: add instructions or questions to
+   `genie_space.json` and re-run, or add **benchmarks** and trusted SQL in the UI.
+
+**Check:** Genie answers *"Which workflows wasted the most money on failed runs?"*
+with a table that matches the dashboard's Findings page.
+
+---
+
+## Step 10 — (Optional) Databricks App
+
+Skip this unless you want the interactive admin UI (edit workspaces/rules from
+a web page, run the collector on demand). Everything else works without it;
+rules and workspace settings can also be edited with SQL:
+```sql
+UPDATE platform_obs_dev.config.rules SET threshold = 20 WHERE rule_id = 'LOW_CPU';
+UPDATE platform_obs_dev.config.workspaces SET workspace_name = 'Finance prod', environment = 'prod' WHERE workspace_id = '123';
+UPDATE platform_obs_dev.config.settings SET value = '25' WHERE key = 'discount_pct';
+```
+
+To enable the app:
+1. In `databricks.yml`, uncomment `# - optional/app.yml` under `include`.
+2. Set `admin_emails` for the target.
+3. Deploy and start it:
+   ```bash
+   databricks bundle deploy -t dev
+   databricks bundle run workflow_obs_app -t dev
+   ```
+4. Grant the app's service principal (Compute → Apps → workflow-obs-dev):
    ```sql
    GRANT USE CATALOG ON CATALOG platform_obs_dev TO `<app-sp>`;
    GRANT USE SCHEMA, SELECT ON SCHEMA platform_obs_dev.silver TO `<app-sp>`;
    GRANT USE SCHEMA, SELECT ON SCHEMA platform_obs_dev.gold   TO `<app-sp>`;
    GRANT USE SCHEMA, SELECT, MODIFY ON SCHEMA platform_obs_dev.config TO `<app-sp>`;
    ```
-3. Open the app URL.
 
-**Check:** the Overview page shows spend numbers and charts.
-
----
-
-## Step 8 — Configure from the app
-
-1. **Workspaces:** give each workspace a name, environment and owner team, and
-   turn off any you don't want monitored. Click **Save changes**.
-2. **Rules:** adjust thresholds, and set your negotiated **discount %** so cost
-   matches your invoice instead of list price.
-3. Click **Run collector now** (on Workspaces) so findings use the new settings.
-
-**Check:** the Findings page lists items with estimated savings.
+**Check:** the app's Overview page shows spend numbers.
 
 ---
 
-## Step 9 — Share it
-
-App → Permissions → give `CAN_USE` to the groups that should see it.
-Only people in `admin_emails` see the Workspaces and Rules pages.
-
----
-
-## Step 10 — Promote to prod and add regions
+## Step 11 — Promote to prod and add regions
 
 ```bash
 databricks auth login --host https://<us-east-1-hub>.cloud.databricks.com
 databricks bundle deploy -t prod_us_east_1
 databricks bundle run collector -t prod_us_east_1 --params lookback_days=90
-databricks bundle run workflow_obs_app -t prod_us_east_1
+python src/genie/deploy_genie.py --catalog platform_obs --warehouse-id <prod-warehouse-id>
 ```
-Repeat Step 7's grants for the prod catalog and prod app service principal.
+Repeat the Step 4 grants for the prod catalog, then share the prod dashboard and
+Genie space.
 
 **Another region:** copy the `prod_us_east_1` block in `databricks.yml` and
 rename it (e.g. `prod_us_west_2`). Use a hub workspace in that region and
 repeat this step. New workspaces in a region are picked up automatically; you
 never deploy per workspace.
 
-**CI (optional):** move `.github/` to your repo root, add the secrets listed in
-README, and every merge to `main` deploys.
+**CI (optional):** move `.github/` to your repo root and add the secrets listed
+in README. Every merge to `main` deploys the job, dashboard and alerts. Run the
+Genie script yourself, because it needs a human owner.
 
 ---
 
@@ -319,12 +407,13 @@ README, and every merge to `main` deploys.
 
 | You want to… | Change | Then |
 |---|---|---|
-| Change a threshold | Rules page in the app | Run collector |
-| Add a new rule | 1) add a row to the `config.rules` seed in `src/sql/00_setup.sql` 2) add a `named_struct(...)` line in the findings query in `src/sql/20_gold.sql` 3) add a `WHEN` branch if it's a "less than" rule | `bundle deploy`, run collector |
-| Add a metric per job | add a CTE + column in `gold.job_summary_30d` (`20_gold.sql`) | deploy, run collector |
-| Add a new app page | add an option to `page = st.sidebar.radio(...)` and an `elif page == ...` block in `app/app.py` | `bundle deploy` + `bundle run workflow_obs_app` |
+| Change a rule threshold | `UPDATE ... config.rules` (or the app) | run collector |
+| Add a new rule | 1) add a row to the `config.rules` seed in `src/sql/00_setup.sql` 2) add a `named_struct(...)` line in the findings query in `src/sql/20_gold.sql` 3) add a `WHEN` branch if it's a "less than" rule | deploy, run collector |
+| Add a metric per job | CTE + column in `gold.job_summary_30d` (`20_gold.sql`) | deploy, run collector |
+| Add a dashboard chart | edit in the UI → `bundle generate dashboard ... --watch` | commit the JSON |
+| Add an alert | copy a block in `resources/alerts.yml` | `bundle deploy` |
+| Teach Genie something | `instructions` / `sample_questions` in `src/genie/genie_space.json` | re-run `deploy_genie.py` |
 | Change the schedule | `quartz_cron_expression` in `resources/collector_job.yml` | `bundle deploy` |
-| Change catalog / admins | `variables` per target in `databricks.yml` | `bundle deploy`, restart app |
 
 Test SQL changes quickly by pasting the statement into a SQL editor, with
 `${catalog}` replaced by `platform_obs_dev` and `${lookback_days}` by `3`.
@@ -335,29 +424,34 @@ Test SQL changes quickly by pasting the statement into a SQL editor, with
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `TABLE_OR_VIEW_NOT_FOUND system.lakeflow...` | system schema not enabled | account admin enables `lakeflow` / `compute` schemas |
-| `PERMISSION_DENIED` in a job task | the run-as identity lacks grants | Step 4 grants for that identity |
-| Column not found `setup_duration_seconds` | older task timeline schema in your account | in `10_silver.sql` replace the three duration lines with `0` and remove the `HIGH_SETUP_OVERHEAD` rule |
-| App: "No usage yet" | collector hasn't run, or no workspaces enabled | run Step 6; check `config.workspaces.enabled` |
-| App error about the warehouse | app has no `CAN_USE`, or warehouse stopped | redeploy (the bundle grants it); start the warehouse |
-| Costs look ~20–40% high | list price vs negotiated | set discount % on the Rules page |
-| Workspace names are IDs | `system.access.workspaces_latest` not available | type names on the Workspaces page |
-| Only some workspaces appear | system tables are per region | deploy a hub in each region (Step 10) |
+| `bundle validate`: unknown field `dataset_catalog` / `alerts` | CLI too old | upgrade to v0.281+ |
+| `TABLE_OR_VIEW_NOT_FOUND system.lakeflow...` | system schema not enabled | account admin enables it |
+| `PERMISSION_DENIED` in a job task | run-as identity lacks grants | Step 4 grants |
+| Column not found `setup_duration_seconds` | older task timeline schema | in `10_silver.sql` replace the three duration lines with `0`; disable rule `HIGH_SETUP_OVERHEAD` |
+| Dashboard widget error "no fields to visualize" | widget field mismatch after an edit | fix in the UI, then `bundle generate dashboard --watch` |
+| Dashboard empty for a viewer | viewer lacks SELECT | Step 4 viewer grants |
+| Alert state "Unknown" | never evaluated, or the query errors | open the alert → Run now; read the error |
+| Genie script: 403 / not found | Genie not enabled, or no CAN_USE on the warehouse | workspace admin enables Genie; grant warehouse CAN_USE |
+| Genie gives wrong joins | needs guidance | add an instruction or sample question; re-run the script |
+| Costs look ~20–40% high | list price vs negotiated | `UPDATE config.settings SET value='<pct>' WHERE key='discount_pct'` |
+| Only some workspaces appear | system tables are per region | deploy a hub per region |
 
 ---
 
 ## Appendix A — No CLI on the laptop
 
-If you can only use the Databricks web UI:
-
-1. In the workspace, create a Git folder for your project repo (or a plain
-   workspace folder), then create each file there with the same paths. Paste
-   the contents from `bootstrap.sh`; each file sits between a `write '<path>'`
-   line and the end-of-file marker line that follows it.
-2. Open `databricks.yml` in the workspace file editor. The **Deployments**
-   (bundle) panel lets you validate, deploy and run the bundle from the browser,
-   with the same targets as Steps 5–7.
-3. Everything after that (grants, backfill, app setup) is the same.
+1. In the workspace, create a Git folder (or a plain workspace folder) and
+   create each file with the same paths. Paste the contents from
+   `bootstrap.sh`; each file sits between a `write '<path>'` line and the
+   end-of-file marker line that follows it.
+2. Open `databricks.yml` in the workspace file editor and use the
+   **Deployments** (bundle) panel to validate, deploy and run (Steps 5–6).
+3. For the Genie space without local Python, run `src/genie/deploy_genie.py`
+   in a notebook cell:
+   `%pip install databricks-sdk` then
+   `!python deploy_genie.py --catalog platform_obs_dev --warehouse-id <id>`.
+   Or create the space in the UI: add the tables listed in
+   `genie_space.json`, then paste its instructions and sample questions.
 WFOBS_EOF
 
 write 'workflow-observability/app/app.py' <<'WFOBS_EOF'
@@ -644,16 +738,18 @@ WFOBS_EOF
 write 'workflow-observability/databricks.yml' <<'WFOBS_EOF'
 bundle:
   name: workflow-observability
+  databricks_cli_version: ">=0.281.0"   # alerts v2 + dashboard dataset_catalog
 
 include:
-  - resources/*.yml
+  - resources/*.yml          # collector job, dashboard, alerts (always deployed)
+  # - optional/app.yml       # OPTIONAL: uncomment to also deploy the Databricks App
 
 variables:
   catalog:
     description: Unity Catalog catalog that holds the observability layer
     default: platform_obs
   warehouse_id:
-    description: SQL warehouse the app queries through
+    description: SQL warehouse used by the dashboard, alerts, Genie space (and the optional app)
   lookback_days:
     description: Days reprocessed each collector run (billing corrections land late)
     default: "3"
@@ -666,6 +762,17 @@ variables:
   job_sp:
     description: Service principal application ID the collector runs as (prod)
     default: ""
+  alert_email:
+    description: Email (user) that receives SQL alert notifications
+  failed_runs_threshold:
+    description: Alert when failed workflow runs in the last 24h exceed this
+    default: 5
+  cost_spike_pct:
+    description: Alert when yesterday's workflow spend exceeds the 7-day average by this %
+    default: 50
+  stale_hours:
+    description: Alert when the observability data is older than this many hours
+    default: 12
 
 targets:
   # One "hub" per cloud region. System tables only show workspaces in the
@@ -678,6 +785,7 @@ targets:
     variables:
       catalog: platform_obs_dev
       warehouse_id: <dev-warehouse-id>
+      alert_email: <you@company.com>
 
   prod_us_east_1:
     mode: production
@@ -690,6 +798,7 @@ targets:
       catalog: platform_obs
       warehouse_id: <prod-warehouse-id>
       admin_emails: platform-team@example.com
+      alert_email: <platform-oncall@company.com>
 
   # Copy this block for each extra region
   # prod_us_west_2:
@@ -699,13 +808,14 @@ targets:
   #   ...
 WFOBS_EOF
 
-write 'workflow-observability/resources/app.yml' <<'WFOBS_EOF'
+write 'workflow-observability/optional/app.yml' <<'WFOBS_EOF'
 resources:
   apps:
     workflow_obs_app:
       name: workflow-obs-${bundle.target}
       description: Workflow cost, reliability and optimization insights across workspaces
       source_code_path: ../app          # runtime config lives in app/app.yaml
+      # OPTIONAL: deployed only when "optional/app.yml" is listed under include in databricks.yml
       resources:
         - name: sql-warehouse
           sql_warehouse:
@@ -715,6 +825,126 @@ resources:
           job:
             id: ${resources.jobs.collector.id}
             permission: CAN_MANAGE_RUN
+WFOBS_EOF
+
+write 'workflow-observability/resources/alerts.yml' <<'WFOBS_EOF'
+# SQL alerts (v2). Each query returns ONE row with a numeric column that
+# the evaluation compares against a threshold. Notifications go to var.alert_email.
+# Thresholds are bundle variables so each target can tune them.
+
+resources:
+  alerts:
+    wfobs_cost_spike:
+      display_name: "[wfobs] Workflow spend spike"
+      custom_summary: "Yesterday's workflow (JOBS) spend is above the 7-day average"
+      warehouse_id: ${var.warehouse_id}
+      query_text: |
+        -- % change of yesterday's JOBS spend vs the previous 7-day daily average
+        WITH d AS (
+          SELECT usage_date, SUM(effective_cost) AS cost
+          FROM ${var.catalog}.gold.v_daily_cost
+          WHERE billing_origin_product = 'JOBS'
+            AND usage_date BETWEEN date_sub(current_date(), 8) AND date_sub(current_date(), 1)
+          GROUP BY usage_date
+        )
+        SELECT COALESCE(ROUND(100 * (
+                 MAX(CASE WHEN usage_date = date_sub(current_date(), 1) THEN cost END)
+                 / NULLIF(AVG(CASE WHEN usage_date < date_sub(current_date(), 1) THEN cost END), 0) - 1), 1), 0)
+               AS pct_change
+        FROM d
+      evaluation:
+        source:
+          name: pct_change
+          display: "% vs 7-day avg"
+        comparison_operator: GREATER_THAN
+        threshold:
+          value:
+            double_value: ${var.cost_spike_pct}
+        notification:
+          notify_on_ok: false
+          retrigger_seconds: 86400
+          subscriptions:
+            - user_email: ${var.alert_email}
+      schedule:
+        quartz_cron_schedule: "0 30 9 * * ?"     # daily 09:30
+        timezone_id: America/New_York
+
+    wfobs_failed_runs:
+      display_name: "[wfobs] Failed workflow runs (24h)"
+      custom_summary: "Failed, errored or timed-out workflow runs in the last 24 hours"
+      warehouse_id: ${var.warehouse_id}
+      query_text: |
+        SELECT COUNT(*) AS failed_runs
+        FROM ${var.catalog}.silver.fact_job_run
+        WHERE result_state IN ('FAILED', 'ERROR', 'TIMED_OUT')
+          AND end_time >= current_timestamp() - INTERVAL 24 HOURS
+      evaluation:
+        source:
+          name: failed_runs
+          display: "Failed runs (24h)"
+        comparison_operator: GREATER_THAN
+        threshold:
+          value:
+            double_value: ${var.failed_runs_threshold}
+        notification:
+          notify_on_ok: true
+          retrigger_seconds: 21600
+          subscriptions:
+            - user_email: ${var.alert_email}
+      schedule:
+        quartz_cron_schedule: "0 15 */4 * * ?"   # every 4h, after the collector
+        timezone_id: America/New_York
+
+    wfobs_high_findings:
+      display_name: "[wfobs] High-severity optimization findings"
+      custom_summary: "Open HIGH-severity findings (over-provisioned, failed-run spend, all-purpose compute)"
+      warehouse_id: ${var.warehouse_id}
+      query_text: |
+        SELECT COUNT(*) AS high_findings
+        FROM ${var.catalog}.gold.findings
+        WHERE severity = 'HIGH'
+      evaluation:
+        source:
+          name: high_findings
+          display: "HIGH findings"
+        comparison_operator: GREATER_THAN
+        threshold:
+          value:
+            double_value: 0
+        notification:
+          notify_on_ok: true
+          retrigger_seconds: 604800                # remind weekly while open
+          subscriptions:
+            - user_email: ${var.alert_email}
+      schedule:
+        quartz_cron_schedule: "0 0 10 ? * MON"   # Mondays 10:00
+        timezone_id: America/New_York
+
+    wfobs_data_stale:
+      display_name: "[wfobs] Observability data is stale"
+      custom_summary: "The collector has not refreshed data recently"
+      warehouse_id: ${var.warehouse_id}
+      query_text: |
+        SELECT COALESCE(
+                 (unix_timestamp(current_timestamp()) - unix_timestamp(MAX(end_time))) / 3600.0,
+                 9999) AS hours_since_last_run
+        FROM ${var.catalog}.silver.fact_job_run
+      evaluation:
+        source:
+          name: hours_since_last_run
+          display: "Hours since newest run"
+        comparison_operator: GREATER_THAN
+        threshold:
+          value:
+            double_value: ${var.stale_hours}
+        notification:
+          notify_on_ok: true
+          retrigger_seconds: 21600
+          subscriptions:
+            - user_email: ${var.alert_email}
+      schedule:
+        quartz_cron_schedule: "0 45 */2 * * ?"   # every 2h
+        timezone_id: America/New_York
 WFOBS_EOF
 
 write 'workflow-observability/resources/collector_job.yml' <<'WFOBS_EOF'
@@ -779,6 +1009,1561 @@ resources:
               - "--catalog={{job.parameters.catalog}}"
               - "--lookback_days={{job.parameters.lookback_days}}"
               - "--files=20_gold.sql"
+WFOBS_EOF
+
+write 'workflow-observability/resources/dashboard.yml' <<'WFOBS_EOF'
+# AI/BI (Lakeview) dashboard. Queries in the .lvdash.json use schema.table
+# (e.g. gold.findings); dataset_catalog points them at this target's catalog.
+resources:
+  dashboards:
+    workflow_observability:
+      display_name: "Workflow Observability (${bundle.target})"
+      file_path: ../src/dashboards/workflow_observability.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      dataset_catalog: ${var.catalog}
+      embed_credentials: false        # viewers query with their own permissions
+WFOBS_EOF
+
+write 'workflow-observability/src/dashboards/workflow_observability.lvdash.json' <<'WFOBS_EOF'
+{
+  "datasets": [
+    {
+      "name": "ds_kpi",
+      "displayName": "KPIs (30 days)",
+      "queryLines": [
+        "SELECT\n",
+        "  (SELECT ROUND(SUM(effective_cost), 0) FROM gold.v_daily_cost\n",
+        "     WHERE usage_date >= date_sub(current_date(), 30))                                   AS total_spend_30d,\n",
+        "  (SELECT ROUND(SUM(effective_cost), 0) FROM gold.v_daily_cost\n",
+        "     WHERE usage_date >= date_sub(current_date(), 30) AND billing_origin_product = 'JOBS') AS workflow_spend_30d,\n",
+        "  (SELECT ROUND(SUM(failed_cost), 0) FROM gold.job_summary_30d)                         AS failed_run_spend_30d,\n",
+        "  (SELECT COUNT(*) FROM gold.findings)                                                  AS open_findings,\n",
+        "  (SELECT ROUND(SUM(est_monthly_savings), 0) FROM gold.findings)                        AS est_monthly_savings\n"
+      ]
+    },
+    {
+      "name": "ds_daily_cost",
+      "displayName": "Daily cost",
+      "queryLines": [
+        "SELECT usage_date, workspace_name, billing_origin_product AS product, sku_name,\n",
+        "       effective_cost, list_cost, dbus\n",
+        "FROM gold.v_daily_cost\n",
+        "WHERE usage_date >= date_sub(current_date(), 90)\n"
+      ]
+    },
+    {
+      "name": "ds_jobs",
+      "displayName": "Workflows (30 days)",
+      "queryLines": [
+        "SELECT workspace_name, environment, owner_team, job_name, job_id, run_as,\n",
+        "       runs, success_pct, cost_30d, cost_per_run, failed_cost, growth_pct,\n",
+        "       avg_duration_min, setup_pct, avg_cpu_pct, all_purpose_runs, serverless_share\n",
+        "FROM gold.job_summary_30d\n"
+      ]
+    },
+    {
+      "name": "ds_findings",
+      "displayName": "Findings",
+      "queryLines": [
+        "SELECT severity, title, workspace_name, owner_team, job_name, job_id,\n",
+        "       metric_value, threshold, est_monthly_savings, recommendation, detected_at\n",
+        "FROM gold.findings\n"
+      ]
+    },
+    {
+      "name": "ds_runs",
+      "displayName": "Job runs (30 days)",
+      "queryLines": [
+        "SELECT r.start_time, to_date(r.start_time) AS run_date, r.result_state,\n",
+        "       COALESCE(r.termination_code, 'NONE') AS termination_code,\n",
+        "       r.duration_min, r.effective_cost,\n",
+        "       COALESCE(w.workspace_name, r.workspace_id) AS workspace_name\n",
+        "FROM silver.fact_job_run r\n",
+        "LEFT JOIN config.workspaces w USING (workspace_id)\n",
+        "WHERE r.start_time >= date_sub(current_date(), 30)\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "overview",
+      "displayName": "Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "kpi_total",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "total_spend_30d",
+                      "expression": "`total_spend_30d`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "total_spend_30d",
+                  "displayName": "Total spend (30d)",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Total spend (30d)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_jobs",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "workflow_spend_30d",
+                      "expression": "`workflow_spend_30d`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "workflow_spend_30d",
+                  "displayName": "Workflow spend (30d)",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Workflow spend (30d)"
+              }
+            }
+          },
+          "position": {
+            "x": 1,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_failed",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "failed_run_spend_30d",
+                      "expression": "`failed_run_spend_30d`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "failed_run_spend_30d",
+                  "displayName": "Spend on failed runs",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Spend on failed runs"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_findings",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "open_findings",
+                      "expression": "`open_findings`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "open_findings",
+                  "displayName": "Open findings"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Open findings"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_savings",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "est_monthly_savings",
+                      "expression": "`est_monthly_savings`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "est_monthly_savings",
+                  "displayName": "Est. savings / month",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Est. savings / month"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 0,
+            "width": 2,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "flt_ws_overview",
+            "queries": [
+              {
+                "name": "f_ds_daily_cost_workspace",
+                "query": {
+                  "datasetName": "ds_daily_cost",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace",
+                    "queryName": "f_ds_daily_cost_workspace"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "daily_by_product",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_daily_cost",
+                  "fields": [
+                    {
+                      "name": "usage_day",
+                      "expression": "DATE_TRUNC(\"DAY\", `usage_date`)"
+                    },
+                    {
+                      "name": "cost",
+                      "expression": "SUM(`effective_cost`)"
+                    },
+                    {
+                      "name": "product",
+                      "expression": "`product`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "usage_day",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "date"
+                },
+                "y": {
+                  "fieldName": "cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "cost"
+                },
+                "color": {
+                  "fieldName": "product",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "product"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Daily spend by product"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "spend_by_ws",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_daily_cost",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "cost",
+                      "expression": "SUM(`effective_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "workspace_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "workspace_name"
+                },
+                "y": {
+                  "fieldName": "cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "cost"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Spend by workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "spend_by_sku",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_daily_cost",
+                  "fields": [
+                    {
+                      "name": "sku_name",
+                      "expression": "`sku_name`"
+                    },
+                    {
+                      "name": "cost",
+                      "expression": "SUM(`effective_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "sku_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "sku_name"
+                },
+                "y": {
+                  "fieldName": "cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "cost"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Spend by SKU"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 9,
+            "width": 3,
+            "height": 6
+          }
+        }
+      ]
+    },
+    {
+      "name": "workflows",
+      "displayName": "Workflows",
+      "layout": [
+        {
+          "widget": {
+            "name": "flt_ws_jobs",
+            "queries": [
+              {
+                "name": "f_ds_jobs_workspace",
+                "query": {
+                  "datasetName": "ds_jobs",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace",
+                    "queryName": "f_ds_jobs_workspace"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "top_jobs",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_jobs",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "cost",
+                      "expression": "SUM(`cost_30d`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "job_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "job_name"
+                },
+                "y": {
+                  "fieldName": "cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "cost"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Top workflows by cost (30d)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 3,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "top_growth",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_jobs",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "growth_pct",
+                      "expression": "MAX(`growth_pct`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "job_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "job_name"
+                },
+                "y": {
+                  "fieldName": "growth_pct",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "growth_pct"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Week-over-week cost growth %"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 1,
+            "width": 3,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "jobs_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_jobs",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "job_id",
+                      "expression": "`job_id`"
+                    },
+                    {
+                      "name": "run_as",
+                      "expression": "`run_as`"
+                    },
+                    {
+                      "name": "runs",
+                      "expression": "`runs`"
+                    },
+                    {
+                      "name": "success_pct",
+                      "expression": "`success_pct`"
+                    },
+                    {
+                      "name": "cost_30d",
+                      "expression": "`cost_30d`"
+                    },
+                    {
+                      "name": "cost_per_run",
+                      "expression": "`cost_per_run`"
+                    },
+                    {
+                      "name": "failed_cost",
+                      "expression": "`failed_cost`"
+                    },
+                    {
+                      "name": "growth_pct",
+                      "expression": "`growth_pct`"
+                    },
+                    {
+                      "name": "avg_duration_min",
+                      "expression": "`avg_duration_min`"
+                    },
+                    {
+                      "name": "setup_pct",
+                      "expression": "`setup_pct`"
+                    },
+                    {
+                      "name": "avg_cpu_pct",
+                      "expression": "`avg_cpu_pct`"
+                    },
+                    {
+                      "name": "all_purpose_runs",
+                      "expression": "`all_purpose_runs`"
+                    },
+                    {
+                      "name": "serverless_share",
+                      "expression": "`serverless_share`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "workspace_name"
+                  },
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "job_name"
+                  },
+                  {
+                    "fieldName": "job_id",
+                    "displayName": "job_id"
+                  },
+                  {
+                    "fieldName": "run_as",
+                    "displayName": "run_as"
+                  },
+                  {
+                    "fieldName": "runs",
+                    "displayName": "runs"
+                  },
+                  {
+                    "fieldName": "success_pct",
+                    "displayName": "success_pct"
+                  },
+                  {
+                    "fieldName": "cost_30d",
+                    "displayName": "cost_30d"
+                  },
+                  {
+                    "fieldName": "cost_per_run",
+                    "displayName": "cost_per_run"
+                  },
+                  {
+                    "fieldName": "failed_cost",
+                    "displayName": "failed_cost"
+                  },
+                  {
+                    "fieldName": "growth_pct",
+                    "displayName": "growth_pct"
+                  },
+                  {
+                    "fieldName": "avg_duration_min",
+                    "displayName": "avg_duration_min"
+                  },
+                  {
+                    "fieldName": "setup_pct",
+                    "displayName": "setup_pct"
+                  },
+                  {
+                    "fieldName": "avg_cpu_pct",
+                    "displayName": "avg_cpu_pct"
+                  },
+                  {
+                    "fieldName": "all_purpose_runs",
+                    "displayName": "all_purpose_runs"
+                  },
+                  {
+                    "fieldName": "serverless_share",
+                    "displayName": "serverless_share"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "All workflows"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 6,
+            "height": 9
+          }
+        }
+      ]
+    },
+    {
+      "name": "findings",
+      "displayName": "Findings",
+      "layout": [
+        {
+          "widget": {
+            "name": "flt_ws_findings",
+            "queries": [
+              {
+                "name": "f_ds_findings_workspace",
+                "query": {
+                  "datasetName": "ds_findings",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace",
+                    "queryName": "f_ds_findings_workspace"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "findings_by_rule",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_findings",
+                  "fields": [
+                    {
+                      "name": "title",
+                      "expression": "`title`"
+                    },
+                    {
+                      "name": "findings",
+                      "expression": "COUNT(`job_id`)"
+                    },
+                    {
+                      "name": "severity",
+                      "expression": "`severity`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "title",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "title"
+                },
+                "y": {
+                  "fieldName": "findings",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "findings"
+                },
+                "color": {
+                  "fieldName": "severity",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "severity"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Findings by rule"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "savings_by_rule",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_findings",
+                  "fields": [
+                    {
+                      "name": "title",
+                      "expression": "`title`"
+                    },
+                    {
+                      "name": "savings",
+                      "expression": "SUM(`est_monthly_savings`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "title",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "title"
+                },
+                "y": {
+                  "fieldName": "savings",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "savings"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Est. monthly savings by rule"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 1,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "findings_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_findings",
+                  "fields": [
+                    {
+                      "name": "severity",
+                      "expression": "`severity`"
+                    },
+                    {
+                      "name": "title",
+                      "expression": "`title`"
+                    },
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "owner_team",
+                      "expression": "`owner_team`"
+                    },
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "metric_value",
+                      "expression": "`metric_value`"
+                    },
+                    {
+                      "name": "threshold",
+                      "expression": "`threshold`"
+                    },
+                    {
+                      "name": "est_monthly_savings",
+                      "expression": "`est_monthly_savings`"
+                    },
+                    {
+                      "name": "recommendation",
+                      "expression": "`recommendation`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "severity",
+                    "displayName": "severity"
+                  },
+                  {
+                    "fieldName": "title",
+                    "displayName": "title"
+                  },
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "workspace_name"
+                  },
+                  {
+                    "fieldName": "owner_team",
+                    "displayName": "owner_team"
+                  },
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "job_name"
+                  },
+                  {
+                    "fieldName": "metric_value",
+                    "displayName": "metric_value"
+                  },
+                  {
+                    "fieldName": "threshold",
+                    "displayName": "threshold"
+                  },
+                  {
+                    "fieldName": "est_monthly_savings",
+                    "displayName": "est_monthly_savings"
+                  },
+                  {
+                    "fieldName": "recommendation",
+                    "displayName": "recommendation"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Findings to action"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 7,
+            "width": 6,
+            "height": 9
+          }
+        }
+      ]
+    },
+    {
+      "name": "reliability",
+      "displayName": "Reliability",
+      "layout": [
+        {
+          "widget": {
+            "name": "flt_ws_runs",
+            "queries": [
+              {
+                "name": "f_ds_runs_workspace",
+                "query": {
+                  "datasetName": "ds_runs",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace",
+                    "queryName": "f_ds_runs_workspace"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "runs_by_state",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_runs",
+                  "fields": [
+                    {
+                      "name": "run_day",
+                      "expression": "DATE_TRUNC(\"DAY\", `run_date`)"
+                    },
+                    {
+                      "name": "runs",
+                      "expression": "COUNT(`start_time`)"
+                    },
+                    {
+                      "name": "result_state",
+                      "expression": "`result_state`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "run_day",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "date"
+                },
+                "y": {
+                  "fieldName": "runs",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "runs"
+                },
+                "color": {
+                  "fieldName": "result_state",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "result_state"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Daily runs by outcome"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "termination_codes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_runs",
+                  "fields": [
+                    {
+                      "name": "termination_code",
+                      "expression": "`termination_code`"
+                    },
+                    {
+                      "name": "runs",
+                      "expression": "COUNT(`start_time`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "termination_code",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "termination_code"
+                },
+                "y": {
+                  "fieldName": "runs",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "runs"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Runs by termination code"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 7,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "failed_cost_by_ws",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_runs",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "cost",
+                      "expression": "SUM(CASE WHEN `result_state` IN ('FAILED','ERROR','TIMED_OUT') THEN `effective_cost` ELSE 0 END)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "workspace_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "workspace_name"
+                },
+                "y": {
+                  "fieldName": "cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "cost"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Failed-run spend by workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 7,
+            "width": 3,
+            "height": 6
+          }
+        }
+      ]
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "LEFT"
+    }
+  }
+}
+WFOBS_EOF
+
+write 'workflow-observability/src/genie/deploy_genie.py' <<'WFOBS_EOF'
+"""Create or update the Workflow Observability Genie space (idempotent).
+
+Run as a HUMAN user (a service principal cannot own a Genie space):
+
+    pip install databricks-sdk
+    python src/genie/deploy_genie.py --profile DEFAULT \
+        --catalog platform_obs_dev --warehouse-id <warehouse-id>
+
+The space definition lives in src/genie/genie_space.json (tables,
+instructions, sample questions). Edit that file and re-run to update the
+space. The space is matched by title, so re-runs update instead of duplicating.
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _id(text: str) -> str:
+    """Stable 32-hex id so re-runs don't reshuffle instructions/questions."""
+    return hashlib.md5(text.encode()).hexdigest()
+
+
+def build_serialized_space(spec: dict, catalog: str) -> str:
+    tables = []
+    for t in spec["tables"]:
+        tbl = {
+            "identifier": t["identifier"].replace("${catalog}", catalog),
+            "description": [t["description"]],
+        }
+        cols = [{"column_name": c, "get_example_values": True} for c in t.get("example_value_columns", [])]
+        if cols:
+            tbl["column_configs"] = sorted(cols, key=lambda c: c["column_name"])
+        tables.append(tbl)
+    tables.sort(key=lambda t: t["identifier"])  # API expects tables sorted by identifier
+
+    space = {
+        "version": 1,
+        "config": {
+            "sample_questions": [{"id": _id(q), "question": [q]} for q in spec["sample_questions"]],
+        },
+        "data_sources": {"tables": tables},
+        "instructions": {
+            "text_instructions": [{"id": _id("instructions"), "content": [line + "\n" for line in spec["instructions"]]}],
+        },
+    }
+    return json.dumps(space)
+
+
+def find_space(w, title: str):
+    token = None
+    while True:
+        query = {"page_size": 100}
+        if token:
+            query["page_token"] = token
+        resp = w.api_client.do("GET", "/api/2.0/genie/spaces", query=query)
+        for s in resp.get("spaces", []):
+            if s.get("title") == title:
+                return s
+        token = resp.get("next_page_token")
+        if not token:
+            return None
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--catalog", required=True)
+    p.add_argument("--warehouse-id", required=True)
+    p.add_argument("--profile", default=None, help="Databricks CLI profile (default: env / DEFAULT)")
+    p.add_argument("--title-suffix", default="", help="e.g. ' (dev)' to keep dev and prod spaces apart")
+    p.add_argument("--parent-path", default=None, help="Workspace folder for the space (optional)")
+    p.add_argument("--dry-run", action="store_true", help="print the payload, change nothing")
+    a = p.parse_args()
+
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", a.catalog):
+        sys.exit(f"invalid catalog name: {a.catalog}")
+
+    with open(os.path.join(HERE, "genie_space.json")) as f:
+        spec = json.load(f)
+    title = spec["title"] + a.title_suffix
+    serialized = build_serialized_space(spec, a.catalog)
+
+    if a.dry_run:
+        print(json.dumps(json.loads(serialized), indent=2))
+        return
+
+    from databricks.sdk import WorkspaceClient  # imported here so --dry-run works without the SDK
+
+    w = WorkspaceClient(profile=a.profile) if a.profile else WorkspaceClient()
+    existing = find_space(w, title)
+    if existing:
+        sid = existing["space_id"]
+        w.api_client.do("PATCH", f"/api/2.0/genie/spaces/{sid}", body={
+            "serialized_space": serialized, "title": title,
+            "description": spec["description"], "warehouse_id": a.warehouse_id,
+        })
+        print(f"Updated Genie space '{title}' ({sid})")
+    else:
+        body = {"serialized_space": serialized, "title": title,
+                "description": spec["description"], "warehouse_id": a.warehouse_id}
+        if a.parent_path:
+            body["parent_path"] = a.parent_path
+        sid = w.api_client.do("POST", "/api/2.0/genie/spaces", body=body)["space_id"]
+        print(f"Created Genie space '{title}' ({sid})")
+    print(f"Open: {w.config.host.rstrip('/')}/genie/rooms/{sid}")
+    print("Share it: open the space > Share > give CAN_RUN to your groups "
+          "(they also need SELECT on the gold/silver/config tables).")
+
+
+if __name__ == "__main__":
+    main()
+WFOBS_EOF
+
+write 'workflow-observability/src/genie/genie_space.json' <<'WFOBS_EOF'
+{
+  "title": "Workflow Observability",
+  "description": "Ask about Databricks workflow (Lakeflow Jobs) cost, failures and optimization opportunities across workspaces.",
+  "tables": [
+    {
+      "identifier": "${catalog}.gold.job_summary_30d",
+      "description": "One row per workflow (job) over the last 30 days: runs, success %, cost, cost per run, failed-run cost, week-over-week growth, startup overhead, CPU utilization, all-purpose compute usage.",
+      "example_value_columns": ["workspace_name", "environment", "owner_team", "job_name", "run_as"]
+    },
+    {
+      "identifier": "${catalog}.gold.findings",
+      "description": "Optimization findings: one row per workflow that breaches a rule (LOW_CPU, HIGH_FAILURE_COST, HIGH_SETUP_OVERHEAD, ALL_PURPOSE_COMPUTE, COST_SPIKE, UNTAGGED_SPEND, LOW_SUCCESS_RATE) with an estimated monthly saving and a recommendation.",
+      "example_value_columns": ["severity", "rule_id", "title", "workspace_name", "owner_team"]
+    },
+    {
+      "identifier": "${catalog}.gold.v_daily_cost",
+      "description": "Daily Databricks spend by workspace, product (JOBS, SQL, ALL_PURPOSE, DLT, ...) and SKU. effective_cost is list cost minus the negotiated discount.",
+      "example_value_columns": ["workspace_name", "billing_origin_product", "sku_name"]
+    },
+    {
+      "identifier": "${catalog}.silver.fact_job_run",
+      "description": "One row per workflow run: start/end time, duration in minutes, result_state, termination_code, repairs and cost.",
+      "example_value_columns": ["result_state", "termination_code", "trigger_type"]
+    },
+    {
+      "identifier": "${catalog}.silver.fact_task_run",
+      "description": "One row per task run inside a workflow run: task_key, result_state, setup/queue/execution seconds.",
+      "example_value_columns": ["task_key", "result_state"]
+    },
+    {
+      "identifier": "${catalog}.silver.dim_job",
+      "description": "Latest definition of each workflow: job_id and job_name per workspace.",
+      "example_value_columns": []
+    },
+    {
+      "identifier": "${catalog}.config.workspaces",
+      "description": "Registry of monitored workspaces with friendly name, environment (prod/staging/dev) and owning team.",
+      "example_value_columns": ["workspace_name", "environment", "owner_team"]
+    }
+  ],
+  "instructions": [
+    "All costs are in USD. Use effective_cost (discounted) unless the user explicitly asks for list price; then use list_cost.",
+    "A 'workflow', 'job' or 'pipeline run' means a Lakeflow Job. Workflow spend is billing_origin_product = 'JOBS' in gold.v_daily_cost.",
+    "Join workflows across tables on BOTH workspace_id and job_id; job_id alone is not unique across workspaces.",
+    "Show workspace_name instead of workspace_id, and job_name instead of job_id, whenever possible.",
+    "A run failed when result_state is FAILED, ERROR or TIMED_OUT. Success rate = SUCCEEDED runs / all finished runs.",
+    "gold.job_summary_30d and gold.findings always cover the last 30 days; for other periods use silver.fact_job_run (start_time) or gold.v_daily_cost (usage_date).",
+    "Estimated savings in gold.findings are rough heuristics for prioritizing work; say so when quoting them.",
+    "'Over-provisioned' means rule LOW_CPU; 'startup overhead' means setup_pct / rule HIGH_SETUP_OVERHEAD; 'all-purpose' means rule ALL_PURPOSE_COMPUTE.",
+    "When asked 'why did cost go up', compare last7_cost vs prev7_cost in gold.job_summary_30d and list the workflows with the largest increase."
+  ],
+  "sample_questions": [
+    "Which 10 workflows cost the most in the last 30 days?",
+    "Why did workflow spend go up last week?",
+    "Which workflows wasted the most money on failed runs?",
+    "Show high-severity findings and their estimated monthly savings by owner team",
+    "Which workflows run on all-purpose clusters?",
+    "What is the daily workflow spend trend for prod workspaces over the last 60 days?",
+    "Which jobs have average CPU below 30%?",
+    "What are the most common termination codes for failed runs this month?"
+  ]
+}
 WFOBS_EOF
 
 write 'workflow-observability/src/run_sql.py' <<'WFOBS_EOF'
@@ -946,7 +2731,8 @@ CREATE TABLE IF NOT EXISTS ${catalog}.silver.fact_usage_cost (
   dbus                   DOUBLE,
   list_cost              DOUBLE,
   effective_cost         DOUBLE
-) CLUSTER BY (workspace_id, usage_date);
+) CLUSTER BY (workspace_id, usage_date)
+COMMENT 'One row per billing record for monitored workspaces, priced at list and effective (discounted) cost.';
 
 MERGE INTO ${catalog}.silver.fact_usage_cost t
 USING (
@@ -988,14 +2774,18 @@ WHEN MATCHED THEN UPDATE SET *
 WHEN NOT MATCHED THEN INSERT *;
 
 -- ---------- latest job definitions ----------
-CREATE OR REPLACE TABLE ${catalog}.silver.dim_job AS
+CREATE OR REPLACE TABLE ${catalog}.silver.dim_job
+COMMENT 'Latest definition of each workflow (job_id, job_name) per workspace.'
+AS
 SELECT workspace_id, job_id, name AS job_name, creator_id, tags, change_time, delete_time
 FROM system.lakeflow.jobs
 WHERE workspace_id IN (SELECT workspace_id FROM ${catalog}.config.workspaces WHERE enabled)
 QUALIFY ROW_NUMBER() OVER (PARTITION BY workspace_id, job_id ORDER BY change_time DESC) = 1;
 
 -- ---------- latest cluster definitions (last 90d) ----------
-CREATE OR REPLACE TABLE ${catalog}.silver.dim_cluster AS
+CREATE OR REPLACE TABLE ${catalog}.silver.dim_cluster
+COMMENT 'Latest definition of each cluster seen in the last 90 days.'
+AS
 SELECT workspace_id, cluster_id, cluster_name, cluster_source, owned_by, dbr_version,
        driver_node_type, worker_node_type, worker_count,
        min_autoscale_workers, max_autoscale_workers, change_time
@@ -1021,7 +2811,8 @@ CREATE TABLE IF NOT EXISTS ${catalog}.silver.fact_job_run (
   run_as           STRING,
   list_cost        DOUBLE,
   effective_cost   DOUBLE
-) CLUSTER BY (workspace_id, start_time);
+) CLUSTER BY (workspace_id, start_time)
+COMMENT 'One row per workflow run: timing, duration_min, result_state, termination_code, repairs and cost.';
 
 MERGE INTO ${catalog}.silver.fact_job_run t
 USING (
@@ -1082,7 +2873,8 @@ CREATE TABLE IF NOT EXISTS ${catalog}.silver.fact_task_run (
   queue_s          DOUBLE,
   exec_s           DOUBLE,
   compute_ids      ARRAY<STRING>
-) CLUSTER BY (workspace_id, start_time);
+) CLUSTER BY (workspace_id, start_time)
+COMMENT 'One row per task run inside a workflow run: setup, queue and execution seconds.';
 
 MERGE INTO ${catalog}.silver.fact_task_run t
 USING (
@@ -1122,7 +2914,8 @@ CREATE TABLE IF NOT EXISTS ${catalog}.silver.fact_cluster_util (
   peak_cpu_pct    DOUBLE,
   avg_mem_pct     DOUBLE,
   avg_io_wait_pct DOUBLE
-) CLUSTER BY (workspace_id, util_date);
+) CLUSTER BY (workspace_id, util_date)
+COMMENT 'Daily average/peak CPU and memory utilization of worker nodes per cluster.';
 
 MERGE INTO ${catalog}.silver.fact_cluster_util t
 USING (
@@ -1148,7 +2941,9 @@ write 'workflow-observability/src/sql/20_gold.sql' <<'WFOBS_EOF'
 -- =============================================================
 
 -- Daily cost by workspace / product / SKU (the app filters this)
-CREATE OR REPLACE VIEW ${catalog}.gold.v_daily_cost AS
+CREATE OR REPLACE VIEW ${catalog}.gold.v_daily_cost
+COMMENT 'Daily Databricks spend (USD) by workspace, product and SKU. effective_cost = list cost minus negotiated discount.'
+AS
 SELECT u.usage_date, u.workspace_id,
        COALESCE(w.workspace_name, u.workspace_id) AS workspace_name,
        u.billing_origin_product, u.sku_name, u.is_serverless,
@@ -1158,7 +2953,9 @@ LEFT JOIN ${catalog}.config.workspaces w USING (workspace_id)
 GROUP BY ALL;
 
 -- One row per job with everything the rules need (last 30 days)
-CREATE OR REPLACE TABLE ${catalog}.gold.job_summary_30d AS
+CREATE OR REPLACE TABLE ${catalog}.gold.job_summary_30d
+COMMENT 'One row per workflow (job) for the last 30 days: runs, success %, cost, failed-run cost, WoW growth, startup overhead, CPU, all-purpose usage.'
+AS
 WITH runs AS (
   SELECT workspace_id, job_id,
          COUNT(*)                                                    AS runs,
@@ -1249,7 +3046,9 @@ LEFT JOIN ${catalog}.silver.dim_job j USING (workspace_id, job_id)
 LEFT JOIN ${catalog}.config.workspaces w USING (workspace_id);
 
 -- Findings: one row per (job, rule) breach. Savings are rough estimates.
-CREATE OR REPLACE TABLE ${catalog}.gold.findings AS
+CREATE OR REPLACE TABLE ${catalog}.gold.findings
+COMMENT 'Optimization findings: one row per workflow breaching a rule, with severity, estimated monthly savings (heuristic) and recommendation.'
+AS
 WITH m AS (
   -- one candidate row per (job, rule) with the metric the rule checks
   SELECT s.*, f.rid, f.metric_value, f.est
@@ -1326,8 +3125,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: databricks/setup-cli@main
       - run: |
-          databricks bundle deploy -t ${{ matrix.target }}
-          databricks bundle run workflow_obs_app -t ${{ matrix.target }}
+          databricks bundle deploy -t ${{ matrix.target }}    # job + dashboard + alerts
+          # If the optional app is enabled in databricks.yml, also start it:
+          # databricks bundle run workflow_obs_app -t ${{ matrix.target }}
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}

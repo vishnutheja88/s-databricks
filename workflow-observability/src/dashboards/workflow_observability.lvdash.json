@@ -1,0 +1,1356 @@
+{
+  "datasets": [
+    {
+      "name": "ds_kpi",
+      "displayName": "KPIs (30 days)",
+      "queryLines": [
+        "SELECT\n",
+        "  (SELECT ROUND(SUM(effective_cost), 0) FROM gold.v_daily_cost\n",
+        "     WHERE usage_date >= date_sub(current_date(), 30))                                   AS total_spend_30d,\n",
+        "  (SELECT ROUND(SUM(effective_cost), 0) FROM gold.v_daily_cost\n",
+        "     WHERE usage_date >= date_sub(current_date(), 30) AND billing_origin_product = 'JOBS') AS workflow_spend_30d,\n",
+        "  (SELECT ROUND(SUM(failed_cost), 0) FROM gold.job_summary_30d)                         AS failed_run_spend_30d,\n",
+        "  (SELECT COUNT(*) FROM gold.findings)                                                  AS open_findings,\n",
+        "  (SELECT ROUND(SUM(est_monthly_savings), 0) FROM gold.findings)                        AS est_monthly_savings\n"
+      ]
+    },
+    {
+      "name": "ds_daily_cost",
+      "displayName": "Daily cost",
+      "queryLines": [
+        "SELECT usage_date, workspace_name, billing_origin_product AS product, sku_name,\n",
+        "       effective_cost, list_cost, dbus\n",
+        "FROM gold.v_daily_cost\n",
+        "WHERE usage_date >= date_sub(current_date(), 90)\n"
+      ]
+    },
+    {
+      "name": "ds_jobs",
+      "displayName": "Workflows (30 days)",
+      "queryLines": [
+        "SELECT workspace_name, environment, owner_team, job_name, job_id, run_as,\n",
+        "       runs, success_pct, cost_30d, cost_per_run, failed_cost, growth_pct,\n",
+        "       avg_duration_min, setup_pct, avg_cpu_pct, all_purpose_runs, serverless_share\n",
+        "FROM gold.job_summary_30d\n"
+      ]
+    },
+    {
+      "name": "ds_findings",
+      "displayName": "Findings",
+      "queryLines": [
+        "SELECT severity, title, workspace_name, owner_team, job_name, job_id,\n",
+        "       metric_value, threshold, est_monthly_savings, recommendation, detected_at\n",
+        "FROM gold.findings\n"
+      ]
+    },
+    {
+      "name": "ds_runs",
+      "displayName": "Job runs (30 days)",
+      "queryLines": [
+        "SELECT r.start_time, to_date(r.start_time) AS run_date, r.result_state,\n",
+        "       COALESCE(r.termination_code, 'NONE') AS termination_code,\n",
+        "       r.duration_min, r.effective_cost,\n",
+        "       COALESCE(w.workspace_name, r.workspace_id) AS workspace_name\n",
+        "FROM silver.fact_job_run r\n",
+        "LEFT JOIN config.workspaces w USING (workspace_id)\n",
+        "WHERE r.start_time >= date_sub(current_date(), 30)\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "overview",
+      "displayName": "Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "kpi_total",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "total_spend_30d",
+                      "expression": "`total_spend_30d`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "total_spend_30d",
+                  "displayName": "Total spend (30d)",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Total spend (30d)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_jobs",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "workflow_spend_30d",
+                      "expression": "`workflow_spend_30d`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "workflow_spend_30d",
+                  "displayName": "Workflow spend (30d)",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Workflow spend (30d)"
+              }
+            }
+          },
+          "position": {
+            "x": 1,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_failed",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "failed_run_spend_30d",
+                      "expression": "`failed_run_spend_30d`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "failed_run_spend_30d",
+                  "displayName": "Spend on failed runs",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Spend on failed runs"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_findings",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "open_findings",
+                      "expression": "`open_findings`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "open_findings",
+                  "displayName": "Open findings"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Open findings"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_savings",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "est_monthly_savings",
+                      "expression": "`est_monthly_savings`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "est_monthly_savings",
+                  "displayName": "Est. savings / month",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Est. savings / month"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 0,
+            "width": 2,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "flt_ws_overview",
+            "queries": [
+              {
+                "name": "f_ds_daily_cost_workspace",
+                "query": {
+                  "datasetName": "ds_daily_cost",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace",
+                    "queryName": "f_ds_daily_cost_workspace"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "daily_by_product",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_daily_cost",
+                  "fields": [
+                    {
+                      "name": "usage_day",
+                      "expression": "DATE_TRUNC(\"DAY\", `usage_date`)"
+                    },
+                    {
+                      "name": "cost",
+                      "expression": "SUM(`effective_cost`)"
+                    },
+                    {
+                      "name": "product",
+                      "expression": "`product`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "usage_day",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "date"
+                },
+                "y": {
+                  "fieldName": "cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "cost"
+                },
+                "color": {
+                  "fieldName": "product",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "product"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Daily spend by product"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "spend_by_ws",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_daily_cost",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "cost",
+                      "expression": "SUM(`effective_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "workspace_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "workspace_name"
+                },
+                "y": {
+                  "fieldName": "cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "cost"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Spend by workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "spend_by_sku",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_daily_cost",
+                  "fields": [
+                    {
+                      "name": "sku_name",
+                      "expression": "`sku_name`"
+                    },
+                    {
+                      "name": "cost",
+                      "expression": "SUM(`effective_cost`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "sku_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "sku_name"
+                },
+                "y": {
+                  "fieldName": "cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "cost"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Spend by SKU"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 9,
+            "width": 3,
+            "height": 6
+          }
+        }
+      ]
+    },
+    {
+      "name": "workflows",
+      "displayName": "Workflows",
+      "layout": [
+        {
+          "widget": {
+            "name": "flt_ws_jobs",
+            "queries": [
+              {
+                "name": "f_ds_jobs_workspace",
+                "query": {
+                  "datasetName": "ds_jobs",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace",
+                    "queryName": "f_ds_jobs_workspace"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "top_jobs",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_jobs",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "cost",
+                      "expression": "SUM(`cost_30d`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "job_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "job_name"
+                },
+                "y": {
+                  "fieldName": "cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "cost"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Top workflows by cost (30d)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 3,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "top_growth",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_jobs",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "growth_pct",
+                      "expression": "MAX(`growth_pct`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "job_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "job_name"
+                },
+                "y": {
+                  "fieldName": "growth_pct",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "growth_pct"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Week-over-week cost growth %"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 1,
+            "width": 3,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "jobs_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_jobs",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "job_id",
+                      "expression": "`job_id`"
+                    },
+                    {
+                      "name": "run_as",
+                      "expression": "`run_as`"
+                    },
+                    {
+                      "name": "runs",
+                      "expression": "`runs`"
+                    },
+                    {
+                      "name": "success_pct",
+                      "expression": "`success_pct`"
+                    },
+                    {
+                      "name": "cost_30d",
+                      "expression": "`cost_30d`"
+                    },
+                    {
+                      "name": "cost_per_run",
+                      "expression": "`cost_per_run`"
+                    },
+                    {
+                      "name": "failed_cost",
+                      "expression": "`failed_cost`"
+                    },
+                    {
+                      "name": "growth_pct",
+                      "expression": "`growth_pct`"
+                    },
+                    {
+                      "name": "avg_duration_min",
+                      "expression": "`avg_duration_min`"
+                    },
+                    {
+                      "name": "setup_pct",
+                      "expression": "`setup_pct`"
+                    },
+                    {
+                      "name": "avg_cpu_pct",
+                      "expression": "`avg_cpu_pct`"
+                    },
+                    {
+                      "name": "all_purpose_runs",
+                      "expression": "`all_purpose_runs`"
+                    },
+                    {
+                      "name": "serverless_share",
+                      "expression": "`serverless_share`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "workspace_name"
+                  },
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "job_name"
+                  },
+                  {
+                    "fieldName": "job_id",
+                    "displayName": "job_id"
+                  },
+                  {
+                    "fieldName": "run_as",
+                    "displayName": "run_as"
+                  },
+                  {
+                    "fieldName": "runs",
+                    "displayName": "runs"
+                  },
+                  {
+                    "fieldName": "success_pct",
+                    "displayName": "success_pct"
+                  },
+                  {
+                    "fieldName": "cost_30d",
+                    "displayName": "cost_30d"
+                  },
+                  {
+                    "fieldName": "cost_per_run",
+                    "displayName": "cost_per_run"
+                  },
+                  {
+                    "fieldName": "failed_cost",
+                    "displayName": "failed_cost"
+                  },
+                  {
+                    "fieldName": "growth_pct",
+                    "displayName": "growth_pct"
+                  },
+                  {
+                    "fieldName": "avg_duration_min",
+                    "displayName": "avg_duration_min"
+                  },
+                  {
+                    "fieldName": "setup_pct",
+                    "displayName": "setup_pct"
+                  },
+                  {
+                    "fieldName": "avg_cpu_pct",
+                    "displayName": "avg_cpu_pct"
+                  },
+                  {
+                    "fieldName": "all_purpose_runs",
+                    "displayName": "all_purpose_runs"
+                  },
+                  {
+                    "fieldName": "serverless_share",
+                    "displayName": "serverless_share"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "All workflows"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 6,
+            "height": 9
+          }
+        }
+      ]
+    },
+    {
+      "name": "findings",
+      "displayName": "Findings",
+      "layout": [
+        {
+          "widget": {
+            "name": "flt_ws_findings",
+            "queries": [
+              {
+                "name": "f_ds_findings_workspace",
+                "query": {
+                  "datasetName": "ds_findings",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace",
+                    "queryName": "f_ds_findings_workspace"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "findings_by_rule",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_findings",
+                  "fields": [
+                    {
+                      "name": "title",
+                      "expression": "`title`"
+                    },
+                    {
+                      "name": "findings",
+                      "expression": "COUNT(`job_id`)"
+                    },
+                    {
+                      "name": "severity",
+                      "expression": "`severity`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "title",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "title"
+                },
+                "y": {
+                  "fieldName": "findings",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "findings"
+                },
+                "color": {
+                  "fieldName": "severity",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "severity"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Findings by rule"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "savings_by_rule",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_findings",
+                  "fields": [
+                    {
+                      "name": "title",
+                      "expression": "`title`"
+                    },
+                    {
+                      "name": "savings",
+                      "expression": "SUM(`est_monthly_savings`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "title",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "title"
+                },
+                "y": {
+                  "fieldName": "savings",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "savings"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Est. monthly savings by rule"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 1,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "findings_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_findings",
+                  "fields": [
+                    {
+                      "name": "severity",
+                      "expression": "`severity`"
+                    },
+                    {
+                      "name": "title",
+                      "expression": "`title`"
+                    },
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "owner_team",
+                      "expression": "`owner_team`"
+                    },
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "metric_value",
+                      "expression": "`metric_value`"
+                    },
+                    {
+                      "name": "threshold",
+                      "expression": "`threshold`"
+                    },
+                    {
+                      "name": "est_monthly_savings",
+                      "expression": "`est_monthly_savings`"
+                    },
+                    {
+                      "name": "recommendation",
+                      "expression": "`recommendation`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "severity",
+                    "displayName": "severity"
+                  },
+                  {
+                    "fieldName": "title",
+                    "displayName": "title"
+                  },
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "workspace_name"
+                  },
+                  {
+                    "fieldName": "owner_team",
+                    "displayName": "owner_team"
+                  },
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "job_name"
+                  },
+                  {
+                    "fieldName": "metric_value",
+                    "displayName": "metric_value"
+                  },
+                  {
+                    "fieldName": "threshold",
+                    "displayName": "threshold"
+                  },
+                  {
+                    "fieldName": "est_monthly_savings",
+                    "displayName": "est_monthly_savings"
+                  },
+                  {
+                    "fieldName": "recommendation",
+                    "displayName": "recommendation"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Findings to action"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 7,
+            "width": 6,
+            "height": 9
+          }
+        }
+      ]
+    },
+    {
+      "name": "reliability",
+      "displayName": "Reliability",
+      "layout": [
+        {
+          "widget": {
+            "name": "flt_ws_runs",
+            "queries": [
+              {
+                "name": "f_ds_runs_workspace",
+                "query": {
+                  "datasetName": "ds_runs",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace",
+                    "queryName": "f_ds_runs_workspace"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "runs_by_state",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_runs",
+                  "fields": [
+                    {
+                      "name": "run_day",
+                      "expression": "DATE_TRUNC(\"DAY\", `run_date`)"
+                    },
+                    {
+                      "name": "runs",
+                      "expression": "COUNT(`start_time`)"
+                    },
+                    {
+                      "name": "result_state",
+                      "expression": "`result_state`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "run_day",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "date"
+                },
+                "y": {
+                  "fieldName": "runs",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "runs"
+                },
+                "color": {
+                  "fieldName": "result_state",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "result_state"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Daily runs by outcome"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "termination_codes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_runs",
+                  "fields": [
+                    {
+                      "name": "termination_code",
+                      "expression": "`termination_code`"
+                    },
+                    {
+                      "name": "runs",
+                      "expression": "COUNT(`start_time`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "termination_code",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "termination_code"
+                },
+                "y": {
+                  "fieldName": "runs",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "runs"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Runs by termination code"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 7,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "failed_cost_by_ws",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_runs",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "cost",
+                      "expression": "SUM(CASE WHEN `result_state` IN ('FAILED','ERROR','TIMED_OUT') THEN `effective_cost` ELSE 0 END)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "workspace_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "workspace_name"
+                },
+                "y": {
+                  "fieldName": "cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "cost"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Failed-run spend by workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 7,
+            "width": 3,
+            "height": 6
+          }
+        }
+      ]
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "LEFT"
+    }
+  }
+}

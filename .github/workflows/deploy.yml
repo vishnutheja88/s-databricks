@@ -36,8 +36,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: databricks/setup-cli@main
       - run: |
-          databricks bundle deploy -t ${{ matrix.target }}
-          databricks bundle run workflow_obs_app -t ${{ matrix.target }}
+          databricks bundle deploy -t ${{ matrix.target }}    # job + dashboard + alerts
+          # If the optional app is enabled in databricks.yml, also start it:
+          # databricks bundle run workflow_obs_app -t ${{ matrix.target }}
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}

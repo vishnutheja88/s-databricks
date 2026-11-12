@@ -1,0 +1,117 @@
+# SQL alerts (v2). Each query returns ONE row with a numeric column that
+# the evaluation compares against a threshold. Notifications go to var.alert_email.
+# Thresholds are bundle variables so each target can tune them.
+
+resources:
+  alerts:
+    wfobs_cost_spike:
+      display_name: "[wfobs] Workflow spend spike"
+      custom_summary: "Yesterday's workflow (JOBS) spend is above the 7-day average"
+      warehouse_id: ${var.warehouse_id}
+      query_text: |
+        -- % change of yesterday's JOBS spend vs the previous 7-day daily average
+        WITH d AS (
+          SELECT usage_date, SUM(effective_cost) AS cost
+          FROM ${var.catalog}.gold.v_daily_cost
+          WHERE billing_origin_product = 'JOBS'
+            AND usage_date BETWEEN date_sub(current_date(), 8) AND date_sub(current_date(), 1)
+          GROUP BY usage_date
+        )
+        SELECT COALESCE(ROUND(100 * (
+                 MAX(CASE WHEN usage_date = date_sub(current_date(), 1) THEN cost END)
+                 / NULLIF(AVG(CASE WHEN usage_date < date_sub(current_date(), 1) THEN cost END), 0) - 1), 1), 0)
+               AS pct_change
+        FROM d
+      evaluation:
+        source:
+          name: pct_change
+          display: "% vs 7-day avg"
+        comparison_operator: GREATER_THAN
+        threshold:
+          value:
+            double_value: ${var.cost_spike_pct}
+        notification:
+          notify_on_ok: false
+          retrigger_seconds: 86400
+          subscriptions:
+            - user_email: ${var.alert_email}
+      schedule:
+        quartz_cron_schedule: "0 30 9 * * ?"     # daily 09:30
+        timezone_id: America/New_York
+
+    wfobs_failed_runs:
+      display_name: "[wfobs] Failed workflow runs (24h)"
+      custom_summary: "Failed, errored or timed-out workflow runs in the last 24 hours"
+      warehouse_id: ${var.warehouse_id}
+      query_text: |
+        SELECT COUNT(*) AS failed_runs
+        FROM ${var.catalog}.silver.fact_job_run
+        WHERE result_state IN ('FAILED', 'ERROR', 'TIMED_OUT')
+          AND end_time >= current_timestamp() - INTERVAL 24 HOURS
+      evaluation:
+        source:
+          name: failed_runs
+          display: "Failed runs (24h)"
+        comparison_operator: GREATER_THAN
+        threshold:
+          value:
+            double_value: ${var.failed_runs_threshold}
+        notification:
+          notify_on_ok: true
+          retrigger_seconds: 21600
+          subscriptions:
+            - user_email: ${var.alert_email}
+      schedule:
+        quartz_cron_schedule: "0 15 */4 * * ?"   # every 4h, after the collector
+        timezone_id: America/New_York
+
+    wfobs_high_findings:
+      display_name: "[wfobs] High-severity optimization findings"
+      custom_summary: "Open HIGH-severity findings (over-provisioned, failed-run spend, all-purpose compute)"
+      warehouse_id: ${var.warehouse_id}
+      query_text: |
+        SELECT COUNT(*) AS high_findings
+        FROM ${var.catalog}.gold.findings
+        WHERE severity = 'HIGH'
+      evaluation:
+        source:
+          name: high_findings
+          display: "HIGH findings"
+        comparison_operator: GREATER_THAN
+        threshold:
+          value:
+            double_value: 0
+        notification:
+          notify_on_ok: true
+          retrigger_seconds: 604800                # remind weekly while open
+          subscriptions:
+            - user_email: ${var.alert_email}
+      schedule:
+        quartz_cron_schedule: "0 0 10 ? * MON"   # Mondays 10:00
+        timezone_id: America/New_York
+
+    wfobs_data_stale:
+      display_name: "[wfobs] Observability data is stale"
+      custom_summary: "The collector has not refreshed data recently"
+      warehouse_id: ${var.warehouse_id}
+      query_text: |
+        SELECT COALESCE(
+                 (unix_timestamp(current_timestamp()) - unix_timestamp(MAX(end_time))) / 3600.0,
+                 9999) AS hours_since_last_run
+        FROM ${var.catalog}.silver.fact_job_run
+      evaluation:
+        source:
+          name: hours_since_last_run
+          display: "Hours since newest run"
+        comparison_operator: GREATER_THAN
+        threshold:
+          value:
+            double_value: ${var.stale_hours}
+        notification:
+          notify_on_ok: true
+          retrigger_seconds: 21600
+          subscriptions:
+            - user_email: ${var.alert_email}
+      schedule:
+        quartz_cron_schedule: "0 45 */2 * * ?"   # every 2h
+        timezone_id: America/New_York
