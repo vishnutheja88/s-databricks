@@ -1,0 +1,8 @@
+command: ["streamlit", "run", "app.py"]
+env:
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
+  - name: COLLECTOR_JOB_ID
+    valueFrom: collector-job
+  # catalog and admin_emails are read from the collector job's parameters,
+  # so each bundle target configures them in one place (databricks.yml).

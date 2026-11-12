@@ -1,0 +1,55 @@
+bundle:
+  name: workflow-observability
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog catalog that holds the observability layer
+    default: platform_obs
+  warehouse_id:
+    description: SQL warehouse the app queries through
+  lookback_days:
+    description: Days reprocessed each collector run (billing corrections land late)
+    default: "3"
+  auto_enable_workspaces:
+    description: Newly discovered workspaces are monitored immediately (true) or wait for an admin (false)
+    default: "true"
+  admin_emails:
+    description: Comma-separated emails allowed to edit workspaces/rules in the app
+    default: ""
+  job_sp:
+    description: Service principal application ID the collector runs as (prod)
+    default: ""
+
+targets:
+  # One "hub" per cloud region. System tables only show workspaces in the
+  # hub's own region, and every workspace in that region shows up automatically.
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://<dev-hub-workspace>.cloud.databricks.com
+    variables:
+      catalog: platform_obs_dev
+      warehouse_id: <dev-warehouse-id>
+
+  prod_us_east_1:
+    mode: production
+    workspace:
+      host: https://<us-east-1-hub>.cloud.databricks.com
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      service_principal_name: ${var.job_sp}
+    variables:
+      catalog: platform_obs
+      warehouse_id: <prod-warehouse-id>
+      admin_emails: platform-team@example.com
+
+  # Copy this block for each extra region
+  # prod_us_west_2:
+  #   mode: production
+  #   workspace:
+  #     host: https://<us-west-2-hub>.cloud.databricks.com
+  #   ...

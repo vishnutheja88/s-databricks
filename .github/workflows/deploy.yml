@@ -1,0 +1,44 @@
+name: deploy-workflow-observability
+
+on:
+  push:
+    branches: [main]
+    paths: ['workflow-observability/**', '.github/workflows/deploy.yml']
+  pull_request:
+    paths: ['workflow-observability/**']
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: workflow-observability
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - run: databricks bundle validate -t dev
+        env:
+          DATABRICKS_HOST: ${{ secrets.DEV_DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DEV_DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DEV_DATABRICKS_CLIENT_SECRET }}
+
+  deploy-prod:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [prod_us_east_1]          # add one entry per regional hub
+    environment: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - run: |
+          databricks bundle deploy -t ${{ matrix.target }}
+          databricks bundle run workflow_obs_app -t ${{ matrix.target }}
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}

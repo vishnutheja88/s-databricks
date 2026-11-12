@@ -1,0 +1,61 @@
+resources:
+  jobs:
+    collector:
+      name: workflow-obs-collector
+      description: Builds the observability layer (config -> silver -> gold) from system tables
+      schedule:
+        quartz_cron_expression: "0 0 */4 * * ?"   # every 4h; system tables lag a few hours
+        timezone_id: UTC
+      max_concurrent_runs: 1
+      tags:
+        team: platform
+        product: workflow-observability
+
+      # Job parameters are the single source of truth: the app reads them too.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: lookback_days
+          default: ${var.lookback_days}
+        - name: auto_enable
+          default: ${var.auto_enable_workspaces}
+        - name: admin_emails
+          default: ${var.admin_emails}
+
+      environments:
+        - environment_key: default
+          spec:
+            client: "2"
+
+      tasks:
+        - task_key: setup_and_discover
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/run_sql.py
+            parameters:
+              - "--catalog={{job.parameters.catalog}}"
+              - "--lookback_days={{job.parameters.lookback_days}}"
+              - "--auto_enable={{job.parameters.auto_enable}}"
+              - "--files=00_setup.sql"
+
+        - task_key: build_silver
+          depends_on:
+            - task_key: setup_and_discover
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/run_sql.py
+            parameters:
+              - "--catalog={{job.parameters.catalog}}"
+              - "--lookback_days={{job.parameters.lookback_days}}"
+              - "--files=10_silver.sql"
+
+        - task_key: build_gold_and_findings
+          depends_on:
+            - task_key: build_silver
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/run_sql.py
+            parameters:
+              - "--catalog={{job.parameters.catalog}}"
+              - "--lookback_days={{job.parameters.lookback_days}}"
+              - "--files=20_gold.sql"

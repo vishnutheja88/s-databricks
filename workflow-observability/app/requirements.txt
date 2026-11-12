@@ -1,0 +1,6 @@
+streamlit>=1.40
+databricks-sql-connector>=3.4
+databricks-sdk>=0.40
+pandas
+pyarrow
+altair
