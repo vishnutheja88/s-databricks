@@ -4,6 +4,8 @@ Cost, reliability and optimization insights for Lakeflow Jobs (workflows) across
 any number of workspaces, delivered as a Databricks App plus a scheduled collector
 job, packaged as one Databricks Asset Bundle.
 
+**New here? Follow [STEP_BY_STEP.md](STEP_BY_STEP.md).** No clone access? Use `bootstrap.sh` at the repo root to recreate this folder.
+
 ## How it scales to N workspaces
 
 System tables are account-wide **per cloud region**. One "hub" deployment per region
