@@ -1,0 +1,93 @@
+# SQL alerts (v2). Each query returns ONE row with a numeric column that the
+# evaluation compares against a threshold. Notifications go to var.alert_email.
+
+resources:
+  alerts:
+    hybrid_memory_failures:
+      display_name: "[hybrid] Jobs with out-of-memory events (24h)"
+      custom_summary: "Prod jobs whose driver logs show OOM errors or memory kills since yesterday"
+      warehouse_id: ${var.warehouse_id}
+      query_text: |
+        SELECT COUNT(DISTINCT job_id) AS jobs
+        FROM ${var.catalog}.ops.v_job_log_signals_daily
+        WHERE log_date >= date_sub(current_date(), 1)
+          AND oom_events > 0
+      evaluation:
+        source:
+          name: jobs
+          display: "Jobs with OOM"
+        comparison_operator: GREATER_THAN
+        threshold:
+          value:
+            double_value: 0
+        notification:
+          notify_on_ok: false
+          retrigger_seconds: 86400
+          subscriptions:
+            - user_email: ${var.alert_email}
+      schedule:
+        quartz_cron_schedule: "0 10 8 * * ?"     # daily 08:10
+        timezone_id: America/New_York
+
+    hybrid_failed_runs:
+      display_name: "[hybrid] Failed job runs yesterday"
+      custom_summary: "Failed, errored or timed-out prod job runs that started yesterday"
+      warehouse_id: ${var.warehouse_id}
+      query_text: |
+        SELECT COALESCE(SUM(failed_runs), 0) AS failed
+        FROM ${var.catalog}.ops.v_job_run_health_daily
+        WHERE run_date = date_sub(current_date(), 1)
+      evaluation:
+        source:
+          name: failed
+          display: "Failed runs"
+        comparison_operator: GREATER_THAN
+        threshold:
+          value:
+            double_value: 0
+        notification:
+          notify_on_ok: false
+          retrigger_seconds: 86400
+          subscriptions:
+            - user_email: ${var.alert_email}
+      schedule:
+        quartz_cron_schedule: "0 12 8 * * ?"
+        timezone_id: America/New_York
+
+    hybrid_cost_spike:
+      display_name: "[hybrid] Job cost spike"
+      custom_summary: "Jobs whose daily cost is above N x their prior 7-day average"
+      warehouse_id: ${var.warehouse_id}
+      query_text: |
+        WITH d AS (
+          SELECT job_id, usage_date, list_cost_usd
+          FROM ${var.catalog}.ops.v_job_cost_daily
+          WHERE usage_date >= date_sub(current_date(), 9)
+        ),
+        x AS (
+          SELECT job_id,
+            MAX(CASE WHEN usage_date = date_sub(current_date(), 2) THEN list_cost_usd END) AS day_cost,
+            AVG(CASE WHEN usage_date < date_sub(current_date(), 2) THEN list_cost_usd END) AS prior_avg
+          FROM d
+          GROUP BY job_id
+        )
+        SELECT COUNT(*) AS spiking_jobs
+        FROM x
+        WHERE day_cost > ${var.cost_spike_ratio} * prior_avg
+          AND day_cost > ${var.cost_spike_min_usd}
+      evaluation:
+        source:
+          name: spiking_jobs
+          display: "Spiking jobs"
+        comparison_operator: GREATER_THAN
+        threshold:
+          value:
+            double_value: 0
+        notification:
+          notify_on_ok: false
+          retrigger_seconds: 86400
+          subscriptions:
+            - user_email: ${var.alert_email}
+      schedule:
+        quartz_cron_schedule: "0 14 8 * * ?"
+        timezone_id: America/New_York

@@ -1,0 +1,51 @@
+bundle:
+  name: hybrid-optimization
+  databricks_cli_version: ">=0.281.0"   # alerts v2
+
+include:
+  - resources/*.yml          # ops job (setup -> views -> daily snapshot) + alerts
+
+variables:
+  catalog:
+    description: Catalog that holds Watchtower (bronze/silver) and the ops schema
+    default: watchtower
+  workspace_id:
+    description: Numeric ID of the workspace being optimized (number after o= in its URL)
+  warehouse_id:
+    description: SQL warehouse used by the alerts and the Genie space
+  job_sp:
+    description: Service principal application ID the ops job runs as (prod)
+    default: ""
+  alert_email:
+    description: Email (user) that receives SQL alert notifications
+  cost_spike_ratio:
+    description: Alert when a job's daily cost exceeds its prior 7-day average by this factor
+    default: 2
+  cost_spike_min_usd:
+    description: Ignore cost spikes below this daily cost (USD, list price)
+    default: 50
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://<dev-workspace>.cloud.databricks.com
+    variables:
+      catalog: watchtower
+      workspace_id: "<dev-workspace-id>"
+      warehouse_id: <dev-warehouse-id>
+      alert_email: <you@company.com>
+
+  prod:
+    mode: production
+    workspace:
+      host: https://<prod-workspace>.cloud.databricks.com
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      service_principal_name: ${var.job_sp}
+    variables:
+      catalog: watchtower
+      workspace_id: "<prod-workspace-id>"
+      warehouse_id: <prod-warehouse-id>
+      alert_email: <platform-oncall@company.com>

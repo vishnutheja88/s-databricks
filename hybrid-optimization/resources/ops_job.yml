@@ -1,0 +1,61 @@
+resources:
+  jobs:
+    hybrid_ops:
+      name: hybrid-optimization-ops
+      description: >
+        Builds the read-only ops views over system tables + Watchtower logs and
+        appends one daily snapshot per job to an append-only history table.
+        Nothing in this job deletes or overwrites data.
+      schedule:
+        quartz_cron_expression: "0 37 5 * * ?"   # daily 05:37 ET, after Watchtower's hourly run
+        timezone_id: America/New_York
+      max_concurrent_runs: 1
+      tags:
+        team: platform
+        product: hybrid-optimization
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: workspace_id
+          default: ${var.workspace_id}
+        - name: snapshot_date        # empty = 2 days ago; set YYYY-MM-DD to backfill one day
+          default: ""
+
+      environments:
+        - environment_key: default
+          spec:
+            client: "2"
+
+      tasks:
+        - task_key: setup
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/run_sql.py
+            parameters:
+              - "--catalog={{job.parameters.catalog}}"
+              - "--workspace_id={{job.parameters.workspace_id}}"
+              - "--files=00_setup.sql"
+
+        - task_key: build_views
+          depends_on:
+            - task_key: setup
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/run_sql.py
+            parameters:
+              - "--catalog={{job.parameters.catalog}}"
+              - "--workspace_id={{job.parameters.workspace_id}}"
+              - "--files=10_views.sql"
+
+        - task_key: daily_snapshot
+          depends_on:
+            - task_key: build_views
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/run_sql.py
+            parameters:
+              - "--catalog={{job.parameters.catalog}}"
+              - "--workspace_id={{job.parameters.workspace_id}}"
+              - "--snapshot_date={{job.parameters.snapshot_date}}"
+              - "--files=20_daily_snapshot.sql"
