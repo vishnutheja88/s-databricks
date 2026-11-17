@@ -21,7 +21,9 @@ driver logs (`${catalog}.silver.logs`) say why. Packaged as a Databricks Asset B
 
 ## Conventions
 
-- `${catalog}`, `${workspace_id}`, `${snapshot_date_expr}` placeholders in `src/sql`;
+- Cost = `usage_quantity x pricing.effective_list.default x ${price_multiplier}` (bundle var
+  `price_multiplier`, default 1.093). Report `cost_usd`; `list_cost_usd` is reference only.
+- `${catalog}`, `${workspace_id}`, `${snapshot_date_expr}`, `${price_multiplier}` placeholders in `src/sql`;
   `${var.*}` in bundle YAML. Never hardcode workspace IDs or emails.
 - Statements end with `;` at end of line (runner splits on that). No comment line may end in `;`.
 - New recommendation: add the signal to a daily view, roll it up in `v_job_scorecard_30d`,

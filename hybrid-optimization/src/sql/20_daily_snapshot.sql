@@ -4,12 +4,18 @@
 -- Backfill: run the job with snapshot_date=YYYY-MM-DD.
 -- Re-running for a day that is already written inserts nothing.
 -- =============================================================
-INSERT INTO ${catalog}.ops.job_daily_history
+INSERT INTO ${catalog}.ops.job_daily_history (
+  snapshot_date, job_id, job_name, dbus, list_cost_usd, cost_usd, photon,
+  avg_cpu, p95_cpu, avg_mem, max_swap,
+  oom_events, spill_events, lost_executor_events, error_lines,
+  runs, failed_runs, avg_minutes, inserted_at
+)
 SELECT d.dt AS snapshot_date,
   c.job_id,
   j.name AS job_name,
   c.dbus,
   c.list_cost_usd,
+  c.cost_usd,
   c.photon,
   u.avg_cpu,
   u.p95_cpu,

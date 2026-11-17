@@ -19,6 +19,8 @@ resources:
           default: ${var.catalog}
         - name: workspace_id
           default: ${var.workspace_id}
+        - name: price_multiplier     # contract multiplier on effective list price
+          default: ${var.price_multiplier}
         - name: snapshot_date        # empty = 2 days ago; set YYYY-MM-DD to backfill one day
           default: ""
 
@@ -35,6 +37,7 @@ resources:
             parameters:
               - "--catalog={{job.parameters.catalog}}"
               - "--workspace_id={{job.parameters.workspace_id}}"
+              - "--price_multiplier={{job.parameters.price_multiplier}}"
               - "--files=00_setup.sql"
 
         - task_key: build_views
@@ -46,6 +49,7 @@ resources:
             parameters:
               - "--catalog={{job.parameters.catalog}}"
               - "--workspace_id={{job.parameters.workspace_id}}"
+              - "--price_multiplier={{job.parameters.price_multiplier}}"
               - "--files=10_views.sql"
 
         - task_key: daily_snapshot
@@ -57,5 +61,6 @@ resources:
             parameters:
               - "--catalog={{job.parameters.catalog}}"
               - "--workspace_id={{job.parameters.workspace_id}}"
+              - "--price_multiplier={{job.parameters.price_multiplier}}"
               - "--snapshot_date={{job.parameters.snapshot_date}}"
               - "--files=20_daily_snapshot.sql,21_scorecard_snapshot.sql"

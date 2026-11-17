@@ -117,12 +117,13 @@ Change one thing per job, then compare 7 days before/after in `ops.job_daily_his
 
 ## Caveats
 
-- Cost is **list price**; negotiated discounts make real spend lower.
+- Cost is **contract cost** = `usage_quantity x pricing.effective_list.default x price_multiplier`
+  (bundle variable, default 1.093). `list_cost_usd` stays as a reference column.
 - `node_timeline` covers classic compute only, and only worker nodes are measured
   (single-node jobs show blank CPU/memory).
 - Watchtower reads driver logs only; the log patterns in `v_job_log_signals_daily` are
   regexes and may need tuning to your log formats.
-- Savings are conservative estimates at list price, not guarantees.
+- Savings are conservative estimates, not guarantees.
 - The dashboard, Genie and the notebook read the latest saved scorecard
   (`ops.v_job_scorecard_latest`), refreshed once a day. Until the first daily run, the
   dashboard is empty; the notebook falls back to the live view.

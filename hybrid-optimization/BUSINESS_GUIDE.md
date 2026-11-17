@@ -20,7 +20,8 @@ saving, a fix effort and a priority rank. Work goes top-down by rank, cheapest w
 | SPILL | Data spills to disk, runs slow | Runtime only, $0 counted | Medium |
 | CPU_BOUND | Cluster maxed out, runs slow | Runtime only, $0 counted | Low |
 
-All money is **list price** (our negotiated rate is lower) and savings are **estimates**.
+All money is **contract cost**: usage x effective list price x our contract multiplier (1.093).
+Savings are **estimates**.
 
 ## The 4-step loop
 

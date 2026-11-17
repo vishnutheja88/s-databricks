@@ -32,7 +32,7 @@ SELECT priority_rank, job_name, job_id, category, top_recommendation, fix_effort
        oom_events, spill_events, lost_executor_events, error_lines, photon
 FROM ops.v_job_scorecard_latest"""),
     "ds_cost_trend": ("Daily job spend (90 days)", """
-SELECT c.usage_date, COALESCE(s.job_name, c.job_id) AS job_name, s.category, c.list_cost_usd
+SELECT c.usage_date, COALESCE(s.job_name, c.job_id) AS job_name, s.category, c.cost_usd
 FROM ops.v_job_cost_daily c
 LEFT JOIN ops.v_job_scorecard_latest s USING (job_id)
 WHERE c.usage_date >= current_date() - INTERVAL 90 DAYS"""),
@@ -120,7 +120,7 @@ ACTION_COLS = ["priority_rank", "job_name", "top_recommendation", "fix_effort",
 
 PAGES = [
     ("executive", "Executive summary", [
-        counter("kpi_spend", "ds_kpi", "job_spend_30d", "Job spend (30d, list)", USD, x=0),
+        counter("kpi_spend", "ds_kpi", "job_spend_30d", "Job spend (30d, contract)", USD, x=0),
         counter("kpi_save_m", "ds_kpi", "est_monthly_savings", "Est. savings / month", USD, x=1),
         counter("kpi_save_y", "ds_kpi", "est_annual_savings", "Est. savings / year", USD, x=2),
         counter("kpi_failed", "ds_kpi", "failed_run_spend_30d", "Spend on failed runs (30d)", USD, x=3),
@@ -156,7 +156,7 @@ PAGES = [
     ("trends", "Trends", [
         filt("flt_job_cost", "ds_cost_trend", "job_name", "Job", 0, 0, 3),
         filt("flt_job_rt", "ds_runtime_trend", "job_name", "Job", 3, 0, 3),
-        line("cost_trend", "ds_cost_trend", "day", "DATE_TRUNC(\"DAY\", `usage_date`)", "cost", "SUM(`list_cost_usd`)",
+        line("cost_trend", "ds_cost_trend", "day", "DATE_TRUNC(\"DAY\", `usage_date`)", "cost", "SUM(`cost_usd`)",
              "Daily job spend by fix type (90d)", 0, 1, 6, 6, color="category"),
         line("runtime_trend", "ds_runtime_trend", "day", "DATE_TRUNC(\"DAY\", `run_date`)", "avg_minutes", "AVG(`avg_minutes`)",
              "Average run minutes (90d)", 0, 7, 3, 6),

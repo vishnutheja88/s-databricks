@@ -12,7 +12,8 @@
 # MAGIC **Read-only.** It changes no job, cluster or table. The only write is optional: saving the fix plan to
 # MAGIC the append-only table `ops.fix_plan_history` (widget `save_plan = yes`), so you can track what was proposed.
 # MAGIC
-# MAGIC Savings are conservative 30-day estimates at **list price**; your negotiated rate makes real spend lower.
+# MAGIC Cost is **contract cost**: usage x effective list price x contract multiplier (1.093), set in the bundle.
+# MAGIC Savings are conservative 30-day estimates.
 
 # COMMAND ----------
 
@@ -57,7 +58,7 @@ spend = kpi.job_spend_30d_usd or 0
 save = kpi.est_monthly_savings_usd or 0
 pct = (100 * save / spend) if spend else 0
 print(
-    f"Prod jobs cost ${spend:,.0f} in the last 30 days (list price).\n"
+    f"Prod jobs cost ${spend:,.0f} in the last 30 days (contract cost).\n"
     f"{kpi.jobs_needing_action} of {kpi.jobs_analyzed} jobs need action. "
     f"Estimated savings: ${save:,.0f}/month ({pct:.0f}% of spend), about ${kpi.est_annual_savings_usd or 0:,.0f}/year.\n"
     f"${kpi.failed_run_spend_30d_usd or 0:,.0f} was spent on runs that failed."
@@ -236,7 +237,7 @@ else:
     display(spark.sql(f"""
         WITH cost AS (
           SELECT IF(usage_date < DATE(:d), 'before', 'after') AS period,
-                 ROUND(AVG(list_cost_usd), 2) AS avg_daily_cost_usd
+                 ROUND(AVG(cost_usd), 2) AS avg_daily_cost_usd
           FROM {OPS}.v_job_cost_daily
           WHERE job_id = :j AND usage_date BETWEEN date_sub(DATE(:d), 7) AND date_add(DATE(:d), 6)
           GROUP BY 1),

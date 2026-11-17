@@ -21,7 +21,7 @@
     },
     {
       "identifier": "${catalog}.ops.v_job_cost_daily",
-      "description": "Daily DBUs and list cost (USD) per job_id. Join to v_job_scorecard_latest on job_id for job_name. Use for cost growth and trend questions.",
+      "description": "Daily DBUs per job_id with cost_usd (contract cost, the number to report) and list_cost_usd (effective list, reference). Join to v_job_scorecard_latest on job_id for job_name. Use for cost growth and trend questions.",
       "example_value_columns": []
     },
     {
@@ -49,7 +49,7 @@
     }
   ],
   "instructions": [
-    "All data is from the prod workspace. Costs are list price in USD, not the negotiated rate; say so when you report money.",
+    "All data is from the prod workspace. Costs are contract cost in USD: usage x effective list price x our contract multiplier (1.093). list_cost_usd is reference only; report cost_usd / cost_30d_usd.",
     "est_monthly_savings_usd and est_annual_savings_usd are conservative estimates, not guaranteed savings. Call them 'estimated'.",
     "category is the fix type: MEMORY, SPILL, LOST_EXECUTORS, FAILING, MULTI_CLUSTER, OVERSIZED, CPU_BOUND or OK. Use top_recommendation to explain it in plain words.",
     "priority_rank orders the work: 1 is the job to fix first. Jobs with category OK have no rank.",

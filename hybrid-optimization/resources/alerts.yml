@@ -60,14 +60,14 @@ resources:
       warehouse_id: ${var.warehouse_id}
       query_text: |
         WITH d AS (
-          SELECT job_id, usage_date, list_cost_usd
+          SELECT job_id, usage_date, cost_usd
           FROM ${var.catalog}.ops.v_job_cost_daily
           WHERE usage_date >= date_sub(current_date(), 9)
         ),
         x AS (
           SELECT job_id,
-            MAX(CASE WHEN usage_date = date_sub(current_date(), 2) THEN list_cost_usd END) AS day_cost,
-            AVG(CASE WHEN usage_date < date_sub(current_date(), 2) THEN list_cost_usd END) AS prior_avg
+            MAX(CASE WHEN usage_date = date_sub(current_date(), 2) THEN cost_usd END) AS day_cost,
+            AVG(CASE WHEN usage_date < date_sub(current_date(), 2) THEN cost_usd END) AS prior_avg
           FROM d
           GROUP BY job_id
         )

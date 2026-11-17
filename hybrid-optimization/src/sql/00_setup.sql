@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS ${catalog}.ops.job_daily_history (
   job_id               STRING,
   job_name             STRING,
   dbus                 DOUBLE,
-  list_cost_usd        DOUBLE  COMMENT 'List price, not negotiated rate',
+  list_cost_usd        DOUBLE  COMMENT 'usage x effective list price (reference)',
+  cost_usd             DOUBLE  COMMENT 'Contract cost: usage x effective list x multiplier',
   photon               BOOLEAN,
   avg_cpu              DOUBLE  COMMENT 'Worker nodes, user+system %',
   p95_cpu              DOUBLE,
@@ -29,13 +30,17 @@ CREATE TABLE IF NOT EXISTS ${catalog}.ops.job_daily_history (
 COMMENT 'Append-only daily snapshot per job (no-delete policy)'
 TBLPROPERTIES ('delta.appendOnly' = 'true');
 
+-- Adds cost_usd to a history table created before the contract multiplier existed.
+-- @optional: fails harmlessly when the column is already there.
+ALTER TABLE ${catalog}.ops.job_daily_history ADD COLUMNS (cost_usd DOUBLE COMMENT 'Contract cost: usage x effective list x multiplier');
+
 -- Daily saved copy of v_job_scorecard_30d. Dashboards and Genie read the latest
 -- snapshot (ops.v_job_scorecard_latest) instead of recomputing from system tables.
 CREATE TABLE IF NOT EXISTS ${catalog}.ops.job_scorecard_daily (
   snapshot_date           DATE    COMMENT 'Day the 30-day scorecard was computed',
   job_id                  STRING,
   job_name                STRING,
-  cost_30d_usd            DOUBLE  COMMENT 'List price',
+  cost_30d_usd            DOUBLE  COMMENT 'Contract cost: usage x effective list x multiplier',
   dbus_30d                DOUBLE,
   photon                  BOOLEAN,
   runs                    BIGINT,
@@ -53,7 +58,7 @@ CREATE TABLE IF NOT EXISTS ${catalog}.ops.job_scorecard_daily (
   error_lines             BIGINT,
   category                STRING  COMMENT 'Fix type',
   top_recommendation      STRING,
-  est_monthly_savings_usd DOUBLE  COMMENT 'Estimate, list price',
+  est_monthly_savings_usd DOUBLE  COMMENT 'Estimate, contract cost',
   fix_effort              STRING,
   est_annual_savings_usd  DOUBLE,
   priority_rank           INT     COMMENT '1 = fix first; NULL when category = OK',

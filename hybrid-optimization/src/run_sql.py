@@ -4,6 +4,7 @@ Placeholders substituted in every file:
   ${catalog}            Unity Catalog catalog that holds Watchtower + the ops schema
   ${workspace_id}       numeric ID of the workspace being optimized (prod)
   ${snapshot_date_expr} DATE literal for --snapshot_date, else date_sub(current_date(), 2)
+  ${price_multiplier}   contract multiplier on effective list price (e.g. 1.093)
 
 Statements are separated by a line ending in ';'.
 A statement containing '-- @optional' may fail without failing the job.
@@ -36,6 +37,8 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--catalog", required=True)
     p.add_argument("--workspace_id", required=True)
+    p.add_argument("--price_multiplier", default="1.093",
+                   help="cost = usage_quantity x pricing.effective_list.default x this")
     p.add_argument("--snapshot_date", default="", help="YYYY-MM-DD for backfill; empty = 2 days ago")
     p.add_argument("--files", required=True, help="comma-separated file names in src/sql")
     return p.parse_args(argv)
@@ -46,12 +49,16 @@ def substitutions(a):
         raise ValueError(f"invalid catalog name: {a.catalog}")
     if not re.fullmatch(r"[0-9]+", a.workspace_id):
         raise ValueError(f"workspace_id must be numeric, got: {a.workspace_id}")
+    mult = float(a.price_multiplier)
+    if not 0 < mult < 5:
+        raise ValueError(f"price_multiplier out of range: {a.price_multiplier}")
     if a.snapshot_date.strip():
         d = datetime.date.fromisoformat(a.snapshot_date.strip())
         snap = f"DATE'{d.isoformat()}'"
     else:
         snap = "date_sub(current_date(), 2)"
-    return {"catalog": a.catalog, "workspace_id": a.workspace_id, "snapshot_date_expr": snap}
+    return {"catalog": a.catalog, "workspace_id": a.workspace_id, "snapshot_date_expr": snap,
+            "price_multiplier": repr(mult)}
 
 
 def strip_comments(sql):

@@ -18,11 +18,14 @@ variables:
     default: ""
   alert_email:
     description: Email (user) that receives SQL alert notifications
+  price_multiplier:
+    description: Contract multiplier on effective list price (cost = usage x effective_list x multiplier)
+    default: 1.093
   cost_spike_ratio:
     description: Alert when a job's daily cost exceeds its prior 7-day average by this factor
     default: 2
   cost_spike_min_usd:
-    description: Ignore cost spikes below this daily cost (USD, list price)
+    description: Ignore cost spikes below this daily cost (USD, contract cost)
     default: 50
 
 targets:

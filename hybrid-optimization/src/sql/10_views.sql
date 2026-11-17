@@ -32,14 +32,17 @@ WHERE n.workspace_id = '${workspace_id}'
   AND n.driver = false
 GROUP BY ALL;
 
--- 3. Daily cost per job (list price, USD).
+-- 3. Daily cost per job (USD).
+--    cost_usd      = usage_quantity x pricing.effective_list.default x contract multiplier (the number we report)
+--    list_cost_usd = usage_quantity x pricing.effective_list.default (reference only)
 CREATE OR REPLACE VIEW ${catalog}.ops.v_job_cost_daily
-COMMENT 'Daily DBUs and list cost per job'
+COMMENT 'Daily DBUs and cost per job; cost_usd = usage x effective list x ${price_multiplier}'
 AS
 SELECT u.usage_metadata.job_id AS job_id,
   u.usage_date,
   ROUND(SUM(u.usage_quantity), 2) AS dbus,
-  ROUND(SUM(u.usage_quantity * p.pricing.default), 2) AS list_cost_usd,
+  ROUND(SUM(u.usage_quantity * p.pricing.effective_list.default * ${price_multiplier}), 2) AS cost_usd,
+  ROUND(SUM(u.usage_quantity * p.pricing.effective_list.default), 2) AS list_cost_usd,
   BOOL_OR(u.product_features.is_photon) AS photon
 FROM system.billing.usage u
 JOIN system.billing.list_prices p
@@ -90,7 +93,7 @@ FROM runs
 GROUP BY ALL;
 
 -- 6. 30-day scorecard: one row per job, one prioritized action, estimated saving.
---    Savings are conservative 30-day estimates at list price:
+--    Cost is contract cost (effective list x ${price_multiplier}). Savings are conservative 30-day estimates:
 --      FAILING / MEMORY / LOST_EXECUTORS -> spend on failed runs (wasted outright)
 --      MULTI_CLUSTER -> 10% of job cost (startup and idle time of extra clusters)
 --      OVERSIZED -> job cost x (1 - max(p95 CPU, avg mem) / 70), capped at 50%
@@ -99,7 +102,7 @@ CREATE OR REPLACE VIEW ${catalog}.ops.v_job_scorecard_30d
 COMMENT 'Per-job cost, utilization, log signals, top recommendation and estimated saving (30 days)'
 AS
 WITH c AS (
-  SELECT job_id, SUM(list_cost_usd) AS cost, SUM(dbus) AS dbus, BOOL_OR(photon) AS photon
+  SELECT job_id, SUM(cost_usd) AS cost, SUM(dbus) AS dbus, BOOL_OR(photon) AS photon
   FROM ${catalog}.ops.v_job_cost_daily
   WHERE usage_date >= current_date() - INTERVAL 30 DAYS
   GROUP BY job_id
@@ -151,7 +154,7 @@ fr AS (
   HAVING MAX_BY(result_state, period_end_time) IN ('FAILED', 'TIMED_OUT', 'ERROR')
 ),
 f AS (
-  SELECT fr.job_id, ROUND(SUM(bu.usage_quantity * p.pricing.default), 2) AS failed_cost
+  SELECT fr.job_id, ROUND(SUM(bu.usage_quantity * p.pricing.effective_list.default * ${price_multiplier}), 2) AS failed_cost
   FROM fr
   JOIN system.billing.usage bu
     ON bu.workspace_id = '${workspace_id}'
