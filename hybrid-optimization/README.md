@@ -54,6 +54,7 @@ notebooks/validate_findings.py     auto results, Genie benchmarks, manual profil
 policies/prod-job-cluster-policy.json   cluster log delivery to the Volume (nothing else)
 watchtower/                        no-delete patch, prod target, S3 storage tiering
 docs/                              architecture, traceability, scope template, validation, report outline
+app-prototype/                     single-file UI prototype (filters | insights | assistant) + handoff for the Databricks App
 tools/build_dashboard.py  tools/check.py  tools/backfill.py
 ```
 

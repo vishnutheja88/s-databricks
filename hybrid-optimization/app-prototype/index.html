@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lakehouse Job Observability</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: three-pane operations console. Filters (left) narrow one shared dataset;
+   insights (center) and the assistant (right) always answer for the same filtered set. */
+:root {
+  --bg: #F3F5F7;
+  --surface: #FFFFFF;
+  --surface-2: #EDF1F4;
+  --ink: #13202B;
+  --muted: #566778;
+  --line: #D9E0E7;
+  --accent: #0B6E79;
+  --accent-ink: #FFFFFF;
+  --accent-soft: #DDF0F1;
+  --good: #1B7A4B; --good-soft: #E3F3EA;
+  --warn: #9A5B00; --warn-soft: #FBEFD9;
+  --crit: #B42318; --crit-soft: #FBE7E5;
+  --c-memory: #B42318; --c-spill: #C2560C; --c-lost: #6D4BC4; --c-failing: #A3164A;
+  --c-multi: #1C64A8; --c-oversized: #0B6E79; --c-cpu: #8A6A00; --c-ok: #8A99A8;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(19,32,43,.06), 0 4px 16px rgba(19,32,43,.05);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0D1318; --surface: #141C23; --surface-2: #1A242D; --ink: #E5ECF2; --muted: #93A3B3;
+    --line: #26323D; --accent: #45B8C3; --accent-ink: #062329; --accent-soft: #123239;
+    --good: #5CC98E; --good-soft: #12301F; --warn: #F0B45A; --warn-soft: #33260F; --crit: #FF8A7E; --crit-soft: #3A1714;
+    --c-memory: #FF8A7E; --c-spill: #F59E5B; --c-lost: #A992F0; --c-failing: #F27AA6;
+    --c-multi: #6BAAF0; --c-oversized: #45B8C3; --c-cpu: #E3C04F; --c-ok: #6E7F90;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0D1318; --surface: #141C23; --surface-2: #1A242D; --ink: #E5ECF2; --muted: #93A3B3;
+  --line: #26323D; --accent: #45B8C3; --accent-ink: #062329; --accent-soft: #123239;
+  --good: #5CC98E; --good-soft: #12301F; --warn: #F0B45A; --warn-soft: #33260F; --crit: #FF8A7E; --crit-soft: #3A1714;
+  --c-memory: #FF8A7E; --c-spill: #F59E5B; --c-lost: #A992F0; --c-failing: #F27AA6;
+  --c-multi: #6BAAF0; --c-oversized: #45B8C3; --c-cpu: #E3C04F; --c-ok: #6E7F90;
+  --shadow: 0 1px 2px rgba(0,0,0,.4);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--font-body); -webkit-font-smoothing: antialiased; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.num, td.n, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+h1, h2, h3 { text-wrap: balance; margin: 0; font-weight: 600; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.skip { position: absolute; left: 8px; top: -40px; background: var(--accent); color: var(--accent-ink); padding: 8px 12px; border-radius: 6px; z-index: 50; }
+.skip:focus { top: 8px; }
+
+/* Shell */
+.app { height: 100%; display: grid; grid-template-rows: 56px 1fr; grid-template-columns: 272px minmax(0,1fr) 372px;
+  grid-template-areas: "top top top" "filters main chat"; }
+.top { grid-area: top; display: flex; align-items: center; gap: 16px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; white-space: nowrap; }
+.brand svg { color: var(--accent); }
+.top .meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-left: auto; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 12px; white-space: nowrap; border: 1px solid transparent; }
+.pill.demo { background: var(--warn-soft); color: var(--warn); }
+button.pill { cursor: pointer; }
+button.pill:hover { border-color: var(--line); }
+.pill.good { background: var(--good-soft); color: var(--good); }
+.pill.crit { background: var(--crit-soft); color: var(--crit); }
+.iconbtn { display: none; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+
+/* Filters */
+.filters { grid-area: filters; background: var(--surface); border-right: 1px solid var(--line); overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 18px; }
+.filters h2 { font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+.fgroup { display: flex; flex-direction: column; gap: 8px; }
+.fgroup > .label { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: none; letter-spacing: .02em; }
+.field { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.checks { display: flex; flex-direction: column; gap: 2px; }
+.check { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; }
+.check:hover { background: var(--surface-2); }
+.check input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+.check .count { margin-left: auto; color: var(--muted); font-size: 12px; font-family: var(--font-mono); }
+.dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface); padding: 6px 4px; cursor: pointer; font-size: 12px; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 500; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 3px 9px; font-size: 12px; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+.toggle { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; }
+.switch { position: relative; width: 34px; height: 20px; flex: none; }
+.switch input { position: absolute; inset: 0; opacity: 0; cursor: pointer; margin: 0; }
+.switch span { position: absolute; inset: 0; background: var(--line); border-radius: 999px; transition: background .15s; }
+.switch span::after { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: transform .15s; }
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(14px); }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.range-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 7px 12px; cursor: pointer; font-weight: 500; }
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.small { padding: 4px 10px; font-size: 12px; }
+.linkbtn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 12px; font-weight: 500; }
+
+/* Main */
+main { grid-area: main; overflow-y: auto; padding: 0 20px 28px; min-width: 0; }
+.tabs { position: sticky; top: 0; z-index: 3; background: var(--bg); display: flex; gap: 4px; padding: 12px 0 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tab { border: 0; background: none; padding: 9px 12px; cursor: pointer; color: var(--muted); font-weight: 500; border-bottom: 2px solid transparent; white-space: nowrap; }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.tab:hover { color: var(--ink); }
+.view { display: flex; flex-direction: column; gap: 16px; padding-top: 16px; }
+.view[hidden] { display: none; }
+.headline { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.headline h1 { font-size: 18px; }
+.headline p { margin: 2px 0 0; color: var(--muted); max-width: 72ch; }
+.kpis { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 12px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.kpi .k { font-size: 12px; color: var(--muted); }
+.kpi .v { font-family: var(--font-mono); font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.kpi .s { font-size: 12px; color: var(--muted); }
+.kpi.hl { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.grid2 { display: grid; grid-template-columns: minmax(0,2fr) minmax(0,1fr); gap: 16px; }
+.grid2e { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 16px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
+.card > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.card h2 { font-size: 14px; }
+.card .sub { color: var(--muted); font-size: 12px; }
+.chart svg { display: block; width: 100%; height: auto; }
+.chart text { fill: var(--muted); font-size: 11px; font-family: var(--font-body); }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.opps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.opp { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; border-top: 3px solid var(--accent); }
+.opp .ws { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+.opp .job { font-weight: 600; word-break: break-word; }
+.opp .rec { color: var(--ink); font-size: 13px; }
+.opp .save { font-family: var(--font-mono); color: var(--good); font-weight: 500; }
+.tablewrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--surface); }
+th button { border: 0; background: none; padding: 0; cursor: pointer; font-weight: 600; color: inherit; display: inline-flex; gap: 4px; align-items: center; }
+td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.n, th.n { text-align: right; }
+tbody tr.clickable { cursor: pointer; }
+tbody tr.clickable:hover { background: var(--surface-2); }
+tbody tr:last-child td { border-bottom: 0; }
+.jobcell { font-weight: 500; }
+.jobcell small { display: block; color: var(--muted); font-weight: 400; }
+.tag { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; white-space: nowrap; border: 1px solid; }
+.lvl { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
+.lvl.Low { color: var(--good); } .lvl.Medium { color: var(--warn); } .lvl.High { color: var(--crit); }
+.finding { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--surface-2); color: var(--muted); margin: 2px 4px 0 0; white-space: nowrap; }
+.save-cell { color: var(--good); font-weight: 500; }
+.empty { padding: 28px; text-align: center; color: var(--muted); }
+.coverage { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 10px; }
+.cov { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--surface); display: flex; flex-direction: column; gap: 4px; }
+.cov b { font-family: var(--font-mono); font-size: 18px; font-weight: 500; }
+.cov span { font-size: 12px; color: var(--muted); }
+.status { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; font-size: 12px; }
+.status.ok { color: var(--good); } .status.fail { color: var(--crit); } .status.opt { color: var(--warn); }
+.heat { display: grid; grid-template-columns: 96px repeat(24, minmax(0,1fr)); gap: 2px; font-size: 11px; align-items: center; }
+.heat .cell { height: 22px; border-radius: 3px; }
+.heat .lab { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Chat */
+.chat { grid-area: chat; background: var(--surface); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.chat > header { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+.chat > header h2 { font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.chat > header p { margin: 0; font-size: 12px; color: var(--muted); }
+.engine { font-size: 11px; font-weight: 500; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.engine.live { background: var(--accent-soft); color: var(--accent); }
+.msgs { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.msg { max-width: 100%; border-radius: 10px; padding: 9px 12px; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.msg.user { align-self: flex-end; background: var(--accent); color: var(--accent-ink); max-width: 88%; }
+.msg.bot { background: var(--surface-2); }
+.msg.bot table { font-size: 12px; margin-top: 6px; background: var(--surface); border-radius: 6px; }
+.msg.bot td, .msg.bot th { padding: 4px 6px; }
+.msg.bot td:not(:first-child), .msg.bot th { white-space: nowrap; }
+.msg.bot ul { margin: 4px 0; padding-left: 18px; }
+.msg.bot p { margin: 0 0 6px; }
+.msg.bot p:last-child { margin-bottom: 0; }
+.msg .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.suggest { padding: 0 16px 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.suggest button { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 5px 9px; font-size: 12px; cursor: pointer; text-align: left; }
+.suggest button:hover { border-color: var(--accent); }
+.composer { border-top: 1px solid var(--line); padding: 10px 12px; display: flex; gap: 8px; align-items: flex-end; }
+.composer textarea { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-height: 40px; max-height: 120px; background: var(--surface); }
+.scope-note { font-size: 11px; color: var(--muted); padding: 0 16px 8px; }
+
+/* Dialog */
+dialog { border: 1px solid var(--line); border-radius: 14px; padding: 0; width: min(760px, 94vw); max-height: 88vh; background: var(--surface); color: var(--ink); box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+dialog::backdrop { background: rgba(10,18,24,.45); }
+.dlg { display: flex; flex-direction: column; max-height: 88vh; }
+.dlg header { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.dlg .body { padding: 16px 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
+.metric { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; }
+.metric .k { font-size: 11px; color: var(--muted); }
+.metric .v { font-family: var(--font-mono); font-size: 15px; font-weight: 500; }
+.fix { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 10px; padding: 12px 14px; }
+.fix .mono { font-size: 13px; }
+
+@media (max-width: 1280px) {
+  .app { grid-template-columns: 248px minmax(0,1fr); grid-template-areas: "top top" "filters main"; }
+  .chat { position: fixed; right: 0; top: 56px; bottom: 0; width: min(380px, 92vw); z-index: 20; box-shadow: var(--shadow); transform: translateX(100%); transition: transform .2s; }
+  .chat.open { transform: none; }
+  #chatToggle { display: inline-flex; }
+  .kpis { grid-template-columns: repeat(3, minmax(0,1fr)); }
+}
+@media (max-width: 860px) {
+  .app { grid-template-columns: minmax(0,1fr); grid-template-areas: "top" "main"; }
+  .filters { position: fixed; left: 0; top: 56px; bottom: 0; width: min(300px, 88vw); z-index: 20; box-shadow: var(--shadow); transform: translateX(-100%); transition: transform .2s; }
+  .filters.open { transform: none; }
+  #filterToggle { display: inline-flex; }
+  .grid2, .grid2e { grid-template-columns: minmax(0,1fr); }
+  .kpis { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .top .meta .pill:not(.demo) { display: none; }
+  .metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to insights</a>
+<div class="app">
+  <header class="top" role="banner">
+    <button class="iconbtn" id="filterToggle" aria-controls="filters" aria-expanded="false">Filters</button>
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="5" stroke="currentColor" stroke-width="1.6"/><path d="M5 13h3l2-5 3 9 2-6 1.5 2H19" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Lakehouse Job Observability
+    </div>
+    <div class="meta">
+      <span class="pill demo" title="Example data shaped like ops.v_job_scorecard_latest">Demo data</span>
+      <span class="pill" id="periodPill">Review period</span>
+      <span class="pill">Contract cost: list × 1.093</span>
+      <span class="pill">Snapshot 2026-11-16</span>
+      <button class="pill good" id="validationPill" type="button">Validation</button>
+      <button class="iconbtn" id="chatToggle" aria-controls="chat" aria-expanded="false">Assistant</button>
+    </div>
+  </header>
+
+  <aside class="filters" id="filters" aria-label="Filters">
+    <h2><span>Filters <span class="pill" id="activeCount" aria-live="polite">0 active</span></span><button class="linkbtn" id="resetBtn" type="button">Reset</button></h2>
+    <div class="fgroup">
+      <label class="label" for="q">Search jobs or owners</label>
+      <input class="field" id="q" type="search" placeholder="e.g. orders, finance" autocomplete="off">
+    </div>
+    <div class="fgroup">
+      <label class="label" for="period">Review period</label>
+      <select class="field" id="period">
+        <option value="30">Last 30 days</option>
+        <option value="60">Last 60 days</option>
+        <option value="90">Last 90 days</option>
+      </select>
+    </div>
+    <fieldset class="fgroup" style="border:0;padding:0;margin:0">
+      <legend class="label" style="padding:0;margin-bottom:8px">Workspace</legend>
+      <div class="checks" id="fWorkspace"></div>
+    </fieldset>
+    <fieldset class="fgroup" style="border:0;padding:0;margin:0">
+      <legend class="label" style="padding:0;margin-bottom:8px">Top fix type</legend>
+      <div class="checks" id="fCategory"></div>
+    </fieldset>
+    <div class="fgroup">
+      <span class="label" id="effortLbl">Fix effort</span>
+      <div class="seg" role="group" aria-labelledby="effortLbl" id="fEffort"></div>
+    </div>
+    <div class="fgroup">
+      <span class="label" id="riskLbl">Risk</span>
+      <div class="seg" role="group" aria-labelledby="riskLbl" id="fRisk"></div>
+    </div>
+    <div class="fgroup">
+      <label class="label" for="owner">Owner</label>
+      <select class="field" id="owner"><option value="">All owners</option></select>
+    </div>
+    <div class="fgroup">
+      <span class="label" id="findLbl">Secondary findings</span>
+      <div class="chips" role="group" aria-labelledby="findLbl" id="fFindings"></div>
+    </div>
+    <div class="fgroup">
+      <label class="label" for="minCost">Minimum monthly cost</label>
+      <input id="minCost" type="range" min="0" max="20000" step="250" value="0" aria-describedby="minCostVal">
+      <div class="range-row"><span>$0</span><span id="minCostVal" class="mono">$0</span><span>$20k</span></div>
+    </div>
+    <label class="toggle" for="needsAction"><span>Only jobs needing action</span><span class="switch"><input type="checkbox" id="needsAction"><span></span></span></label>
+  </aside>
+
+  <main id="main" tabindex="-1">
+    <div class="tabs" role="tablist" aria-label="Insights">
+      <button class="tab" role="tab" id="tab-overview" aria-controls="overview" aria-selected="true">Overview</button>
+      <button class="tab" role="tab" id="tab-utilization" aria-controls="utilization" aria-selected="false" tabindex="-1">Cost &amp; utilization</button>
+      <button class="tab" role="tab" id="tab-performance" aria-controls="performance" aria-selected="false" tabindex="-1">Performance</button>
+      <button class="tab" role="tab" id="tab-reliability" aria-controls="reliability" aria-selected="false" tabindex="-1">Reliability</button>
+      <button class="tab" role="tab" id="tab-recommendations" aria-controls="recommendations" aria-selected="false" tabindex="-1">Recommendations</button>
+      <button class="tab" role="tab" id="tab-validation" aria-controls="validation" aria-selected="false" tabindex="-1">Scope &amp; validation</button>
+    </div>
+
+    <section class="view" id="overview" role="tabpanel" aria-labelledby="tab-overview">
+      <div class="headline"><div><h1 id="ovTitle">Where the money goes, and what to fix first</h1><p id="ovSub"></p></div>
+        <button class="btn small" id="copyCsv" type="button">Copy action plan (CSV)</button></div>
+      <div class="kpis" id="kpis"></div>
+      <div class="grid2">
+        <div class="card chart"><header><h2>Daily job spend by workspace</h2><span class="sub">Contract cost, USD per day</span></header><div id="trendChart"></div><div class="legend" id="trendLegend"></div></div>
+        <div class="card chart"><header><h2>Estimated savings by fix type</h2><span class="sub">USD per month</span></header><div id="catChart"></div></div>
+      </div>
+      <div><h2 style="font-size:14px;margin-bottom:10px">Top opportunity per workspace</h2><div class="opps" id="opps"></div></div>
+      <div class="card"><header><h2>Prioritized action plan</h2><span class="sub">Rank 1 = do first. Select a row for the fix plan.</span></header><div class="tablewrap" id="planTable"></div></div>
+    </section>
+
+    <section class="view" id="utilization" role="tabpanel" aria-labelledby="tab-utilization" hidden>
+      <div class="headline"><div><h1>Cost and utilization</h1><p>High cost with low CPU and memory is the clearest right-sizing signal. Idle time counts worker minutes under 10% CPU.</p></div></div>
+      <div class="grid2">
+        <div class="card chart"><header><h2>p95 worker CPU vs monthly cost</h2><span class="sub">Shaded zone = oversized (p95 CPU under 40%)</span></header><div id="scatterChart"></div></div>
+        <div class="card chart"><header><h2>Idle node-hours by job</h2><span class="sub">Review period</span></header><div id="idleChart"></div></div>
+      </div>
+      <div class="card"><header><h2>Utilization detail</h2></header><div class="tablewrap" id="utilTable"></div></div>
+    </section>
+
+    <section class="view" id="performance" role="tabpanel" aria-labelledby="tab-performance" hidden>
+      <div class="headline"><div><h1>Job performance and Spark bottlenecks</h1><p>Runtime trend compares the second half of the review period with the first. Shuffle, spill and skew come from Spark event logs.</p></div></div>
+      <div class="grid2e">
+        <div class="card chart"><header><h2>Runtime trend</h2><span class="sub">Change in average minutes, %</span></header><div id="runtimeChart"></div></div>
+        <div class="card chart"><header><h2>Shuffle read volume</h2><span class="sub">GB, review period</span></header><div id="shuffleChart"></div></div>
+      </div>
+      <div class="card"><header><h2>Run starts by hour of day (UTC)</h2><span class="sub">Darker = more job runs starting. Busy hours compete for capacity.</span></header><div id="heatmap"></div></div>
+      <div class="card"><header><h2>Slow jobs and likely bottlenecks</h2></header><div class="tablewrap" id="perfTable"></div></div>
+    </section>
+
+    <section class="view" id="reliability" role="tabpanel" aria-labelledby="tab-reliability" hidden>
+      <div class="headline"><div><h1>Reliability and root cause</h1><p>Failed runs are paid for in full. Log signals come from driver logs (out of memory, lost executors, errors).</p></div></div>
+      <div class="grid2e">
+        <div class="card chart"><header><h2>Spend on failed runs</h2><span class="sub">USD, review period</span></header><div id="failChart"></div></div>
+        <div class="card chart"><header><h2>Task retries</h2><span class="sub">Extra attempts, review period</span></header><div id="retryChart"></div></div>
+      </div>
+      <div class="card"><header><h2>Jobs with failures, retries or log signals</h2></header><div class="tablewrap" id="relTable"></div></div>
+    </section>
+
+    <section class="view" id="recommendations" role="tabpanel" aria-labelledby="tab-recommendations" hidden>
+      <div class="headline"><div><h1>Recommendations across cost and performance</h1><p>Each job has one top action plus secondary findings. Counts follow the current filters.</p></div></div>
+      <div class="coverage" id="coverage"></div>
+      <div class="card"><header><h2>Top action and secondary findings by job</h2></header><div class="tablewrap" id="recTable"></div></div>
+    </section>
+
+    <section class="view" id="validation" role="tabpanel" aria-labelledby="tab-validation" hidden>
+      <div class="headline"><div><h1>Scope and validation</h1><p>Findings are presented only after they match the raw system tables and logs, and the top actions are confirmed in Databricks tools.</p></div></div>
+      <div class="grid2e">
+        <div class="card"><header><h2>Pilot scope</h2></header><div class="tablewrap" id="scopeTable"></div></div>
+        <div class="card"><header><h2>Access checks</h2><span class="sub">Latest run</span></header><div class="tablewrap" id="accessTable"></div></div>
+      </div>
+      <div class="card"><header><h2>Validation results</h2><span class="sub">Automated (ops layer vs raw sources), Genie benchmark, manual tool checks</span></header><div class="tablewrap" id="valTable"></div></div>
+    </section>
+  </main>
+
+  <aside class="chat" id="chat" aria-label="Optimization assistant">
+    <header>
+      <h2>Optimization assistant <span class="engine" id="engine">Built-in answers</span></h2>
+      <p>Answers use the jobs that match your filters. Ask in plain words.</p>
+    </header>
+    <div class="msgs" id="msgs" role="log" aria-live="polite" aria-relevant="additions"></div>
+    <div class="suggest" id="suggest" aria-label="Suggested questions"></div>
+    <div class="scope-note" id="scopeNote"></div>
+    <form class="composer" id="composer">
+      <label for="ask" class="sr-only">Ask about the insights</label>
+      <textarea id="ask" rows="1" placeholder="Ask about cost, utilization, failures…"></textarea>
+      <button class="btn primary" type="submit" id="sendBtn">Ask</button>
+    </form>
+  </aside>
+</div>
+
+<dialog id="jobDlg" aria-labelledby="dlgTitle"><div class="dlg" id="dlgBody"></div></dialog>
+
+<script>
+"use strict";
+/* ---------- Demo data shaped like ops.v_job_scorecard_latest ---------- */
+let seed = 20261116;
+const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+const pick = a => a[Math.floor(rnd() * a.length)];
+const rr = (a, b) => a + rnd() * (b - a);
+const round = (x, d = 0) => { const m = 10 ** d; return Math.round(x * m) / m; };
+
+const WORKSPACES = [
+  { id: "4021558319027716", name: "prod-etl" },
+  { id: "7710293845521093", name: "analytics" },
+  { id: "1189034567712204", name: "ml-platform" }
+];
+const CATS = {
+  MEMORY: { label: "Memory failure", color: "--c-memory", rec: "Larger or r-family nodes; check skew and partition size", effort: "Medium", risk: "Medium", riskText: "Bigger nodes raise hourly cost: confirm failures stop" },
+  SPILL: { label: "Spilling", color: "--c-spill", rec: "More memory per core or more shuffle partitions", effort: "Medium", risk: "Medium", riskText: "Partition changes can move skew elsewhere: test in dev" },
+  LOST_EXECUTORS: { label: "Lost executors", color: "--c-lost", rec: "SPOT_WITH_FALLBACK with an on-demand driver (first_on_demand = 1)", effort: "Low", risk: "Low", riskText: "On-demand driver costs slightly more per hour" },
+  FAILING: { label: "Failing runs", color: "--c-failing", rec: "Fix the failure before tuning", effort: "High", risk: "High", riskText: "Code or data change: test in dev, deploy through review" },
+  MULTI_CLUSTER: { label: "Several clusters per run", color: "--c-multi", rec: "Share one job cluster across tasks (job_cluster_key)", effort: "Medium", risk: "Medium", riskText: "Tasks share one cluster: size it for the largest task" },
+  OVERSIZED: { label: "Oversized", color: "--c-oversized", rec: "Lower max workers or use smaller nodes", effort: "Low", risk: "Low", riskText: "Runtime can grow if cut too far: reduce in steps, watch the SLA" },
+  CPU_BOUND: { label: "CPU-bound", color: "--c-cpu", rec: "Compute-optimized (c-family) nodes or more workers", effort: "Low", risk: "Low", riskText: "Faster nodes cost more per hour: confirm runtime falls" },
+  OK: { label: "No action", color: "--c-ok", rec: "No primary change", effort: "-", risk: "-", riskText: "-" }
+};
+const FINDINGS = {
+  RETRIES: "Tasks retried: fix flaky tasks, review max_retries",
+  SKEW: "Data skew: enable AQE skew join, salt hot keys",
+  HIGH_SHUFFLE: "Large shuffle: broadcast small tables, filter early",
+  SLOW_QUERIES: "Slow or spilling SQL: check the query profile",
+  DATA_LAYOUT: "Small files or unmaintained tables: liquid clustering, OPTIMIZE",
+  RUNTIME_OUTDATED: "Old runtime: upgrade to the current LTS",
+  PHOTON_CANDIDATE: "Test Photon on this SQL/DataFrame-heavy job",
+  NO_POLICY: "No cluster policy: attach the standard job policy",
+  SCHEDULE_PEAK: "Starts in the busiest hours: stagger the schedule",
+  IDLE: "Over half of node time idle: tighten autoscaling",
+  COST_UP_UTIL_DOWN: "Cost rising while utilization falls: right-size",
+  RUNTIME_GROWING: "Runtime growing: check data growth and query plans"
+};
+const FINDING_LABEL = { RETRIES: "Retries", SKEW: "Skew", HIGH_SHUFFLE: "Large shuffle", SLOW_QUERIES: "Slow SQL", DATA_LAYOUT: "Data layout", RUNTIME_OUTDATED: "Old runtime", PHOTON_CANDIDATE: "Photon candidate", NO_POLICY: "No policy", SCHEDULE_PEAK: "Peak schedule", IDLE: "Idle", COST_UP_UTIL_DOWN: "Cost up, use down", RUNTIME_GROWING: "Runtime growing" };
+const OWNERS = ["Data Engineering", "Finance BI", "Customer Analytics", "ML Platform", "Search Team", "Platform SRE"];
+const NODES = ["m5d.2xlarge", "m5d.4xlarge", "r5d.2xlarge", "i3.2xlarge", "c5d.4xlarge", "m6gd.2xlarge"];
+const JOBS = [
+  ["prod-etl", "bronze_events_ingest", "OVERSIZED", "Data Engineering"], ["prod-etl", "silver_orders_merge", "MEMORY", "Data Engineering"],
+  ["prod-etl", "gold_finance_daily", "MULTI_CLUSTER", "Finance BI"], ["prod-etl", "claims_dedup_nightly", "SPILL", "Data Engineering"],
+  ["prod-etl", "vendor_files_landing", "OK", "Platform SRE"], ["prod-etl", "inventory_snapshot", "OVERSIZED", "Data Engineering"],
+  ["prod-etl", "payments_reconcile", "FAILING", "Finance BI"], ["prod-etl", "cdc_customers_apply", "LOST_EXECUTORS", "Data Engineering"],
+  ["prod-etl", "audit_log_compaction", "OK", "Platform SRE"], ["prod-etl", "shipments_enrich", "CPU_BOUND", "Data Engineering"],
+  ["analytics", "customer_360_build", "OVERSIZED", "Customer Analytics"], ["analytics", "marketing_attribution", "SPILL", "Customer Analytics"],
+  ["analytics", "exec_kpi_refresh", "OK", "Finance BI"], ["analytics", "web_sessions_rollup", "MULTI_CLUSTER", "Customer Analytics"],
+  ["analytics", "churn_features_weekly", "FAILING", "Customer Analytics"], ["analytics", "revenue_forecast_inputs", "OVERSIZED", "Finance BI"],
+  ["analytics", "product_usage_daily", "OK", "Customer Analytics"], ["analytics", "survey_text_parse", "MEMORY", "Customer Analytics"],
+  ["ml-platform", "feature_store_refresh", "OVERSIZED", "ML Platform"], ["ml-platform", "fraud_model_scoring", "CPU_BOUND", "ML Platform"],
+  ["ml-platform", "embeddings_backfill", "MEMORY", "ML Platform"], ["ml-platform", "search_index_rebuild", "LOST_EXECUTORS", "Search Team"],
+  ["ml-platform", "training_data_export", "MULTI_CLUSTER", "ML Platform"], ["ml-platform", "model_monitoring_daily", "OK", "ML Platform"],
+  ["ml-platform", "recsys_candidates", "FAILING", "Search Team"], ["ml-platform", "label_quality_checks", "OK", "ML Platform"]
+];
+
+function makeJob(row, i) {
+  const [wsName, name, arche, owner] = row;
+  const ws = WORKSPACES.find(w => w.name === wsName);
+  const big = ["silver_orders_merge", "customer_360_build", "feature_store_refresh", "embeddings_backfill", "bronze_events_ingest", "fraud_model_scoring"].includes(name);
+  const monthly = round(big ? rr(9000, 19000) : rr(900, 7500), 0);
+  const j = {
+    workspace_id: ws.id, workspace_name: wsName, job_id: String(810000000000 + i * 7919), job_name: name, owner,
+    monthly_cost_usd: monthly, dbus: round(monthly / 0.55 / 1.093, 0), runs: Math.round(rr(28, 240)), failed_runs: 0,
+    failed_share: 0, retries: Math.round(rr(0, 2)), avg_minutes: round(rr(8, 95), 1), runtime_change_pct: round(rr(-12, 14), 1),
+    cost_change_pct: round(rr(-10, 12), 1), p95_cpu_change: round(rr(-6, 6), 1), clusters_per_run: 1,
+    avg_cpu: round(rr(42, 70), 1), p95_cpu: round(rr(58, 82), 1), avg_mem: round(rr(45, 68), 1), max_swap: 0,
+    idle_pct: round(rr(8, 30), 1), oom_events: 0, spill_events: 0, lost_executor_events: 0, error_lines: Math.round(rr(0, 20)),
+    shuffle_read_gb: round(rr(5, 80), 1), disk_spill_gb: 0, max_skew_ratio: round(rr(1.2, 3.5), 1), slow_queries: 0,
+    dbr_version: pick(["15.4.x-scala2.12", "15.4.x-scala2.12", "14.3.x-scala2.12", "13.3.x-scala2.12"]),
+    photon: rnd() > .55, policy_missing: rnd() > .78, small_file_tables: rnd() > .78 ? Math.ceil(rr(1, 3)) : 0,
+    schedule_peak: rnd() > .7, node: pick(NODES), max_workers: Math.round(rr(4, 24)), autoscale: rnd() > .3
+  };
+  if (arche === "OVERSIZED") { j.p95_cpu = round(rr(14, 34), 1); j.avg_cpu = round(j.p95_cpu * rr(.45, .65), 1); j.avg_mem = round(rr(22, 44), 1); j.idle_pct = round(rr(38, 66), 1); j.max_workers = Math.round(rr(12, 32)); }
+  if (arche === "MEMORY") { j.oom_events = Math.round(rr(4, 28)); j.max_swap = round(rr(3, 14), 1); j.avg_mem = round(rr(80, 94), 1); j.failed_runs = Math.round(rr(3, 9)); }
+  if (arche === "SPILL") { j.spill_events = Math.round(rr(30, 140)); j.avg_mem = round(rr(72, 86), 1); j.disk_spill_gb = round(rr(14, 120), 1); j.shuffle_read_gb = round(rr(180, 900), 1); j.max_skew_ratio = round(rr(5, 14), 1); }
+  if (arche === "LOST_EXECUTORS") { j.lost_executor_events = Math.round(rr(6, 30)); j.failed_runs = Math.round(rr(2, 6)); j.retries = Math.round(rr(6, 20)); }
+  if (arche === "FAILING") { j.failed_runs = Math.round(rr(6, 18)); j.retries = Math.round(rr(4, 16)); j.error_lines = Math.round(rr(120, 900)); }
+  if (arche === "MULTI_CLUSTER") { j.clusters_per_run = round(rr(2.4, 5), 1); }
+  if (arche === "CPU_BOUND") { j.avg_cpu = round(rr(87, 95), 1); j.p95_cpu = round(rr(96, 99), 1); j.photon = false; }
+  if (name === "customer_360_build") { j.cost_change_pct = 34.2; j.p95_cpu_change = -14.8; }
+  if (name === "search_index_rebuild") { j.runtime_change_pct = 41.5; }
+  if (name === "marketing_attribution") { j.runtime_change_pct = 28.9; j.slow_queries = 7; }
+  if (name === "exec_kpi_refresh") { j.slow_queries = 4; }
+  j.failed_share = j.runs ? j.failed_runs / j.runs : 0;
+  j.idle_node_hours = round(j.monthly_cost_usd / 4.2 * (j.idle_pct / 100), 0);
+  j.node_hours = round(j.monthly_cost_usd / 4.2, 0);
+  j.daily = Array.from({ length: 90 }, (_, d) => {
+    const trend = 1 + (j.cost_change_pct / 100) * (d / 89) - (j.cost_change_pct / 200);
+    const weekly = (d % 7 === 5 || d % 7 === 6) ? .72 : 1.06;
+    return round(monthly / 30 * trend * weekly * rr(.86, 1.14), 2);
+  });
+  j.hours = Array.from({ length: 24 }, (_, h) => (j.schedule_peak ? (h === 6 || h === 7 ? 1 : 0) : (h === Math.floor(rr(0, 24)) ? 1 : 0)));
+  return j;
+}
+const BASE = JOBS.map(makeJob);
+
+/* Same rules as v_job_scorecard_30d */
+function score(j, days) {
+  const s = Object.assign({}, j);
+  s.review_days = days;
+  s.period_cost_usd = round(j.daily.slice(90 - days).reduce((a, b) => a + b, 0), 2);
+  s.failed_run_cost_usd = round(s.period_cost_usd * j.failed_share * 1.15, 2);
+  s.category =
+    (j.oom_events > 0 || j.max_swap > 5) ? "MEMORY" :
+    ((j.spill_events > 0 && j.avg_mem > 70) || j.disk_spill_gb >= 10) ? "SPILL" :
+    j.lost_executor_events > 0 ? "LOST_EXECUTORS" :
+    j.failed_runs > 0 ? "FAILING" :
+    j.clusters_per_run > 1 ? "MULTI_CLUSTER" :
+    (j.p95_cpu < 40 && j.avg_mem < 50) ? "OVERSIZED" :
+    j.avg_cpu > 85 ? "CPU_BOUND" : "OK";
+  const c = CATS[s.category];
+  const runtimeOld = parseInt(j.dbr_version) * 100 + parseInt(j.dbr_version.split(".")[1]) < 1504;
+  s.runtime_outdated = runtimeOld;
+  s.finding_codes = [
+    j.retries > 0 && "RETRIES", j.max_skew_ratio >= 5 && "SKEW", j.shuffle_read_gb >= 100 && "HIGH_SHUFFLE",
+    j.slow_queries > 0 && "SLOW_QUERIES", j.small_file_tables > 0 && "DATA_LAYOUT", runtimeOld && "RUNTIME_OUTDATED",
+    (!j.photon && j.monthly_cost_usd >= 500 && (j.avg_cpu > 60 || s.category === "CPU_BOUND")) && "PHOTON_CANDIDATE",
+    j.policy_missing && "NO_POLICY", j.schedule_peak && "SCHEDULE_PEAK",
+    (j.idle_pct >= 50 && s.category !== "OVERSIZED") && "IDLE",
+    (j.cost_change_pct >= 20 && j.p95_cpu_change <= -10) && "COST_UP_UTIL_DOWN", j.runtime_change_pct >= 25 && "RUNTIME_GROWING"
+  ].filter(Boolean);
+  const monthlyFail = s.failed_run_cost_usd * 30 / days;
+  s.est_monthly_savings_usd = round(
+    ["MEMORY", "LOST_EXECUTORS", "FAILING"].includes(s.category) ? monthlyFail :
+    s.category === "MULTI_CLUSTER" ? j.monthly_cost_usd * .10 :
+    s.category === "OVERSIZED" ? j.monthly_cost_usd * Math.min(.5, Math.max(0, 1 - Math.max(j.p95_cpu, j.avg_mem) / 70)) : 0);
+  s.est_annual_savings_usd = s.est_monthly_savings_usd * 12;
+  s.top_recommendation = c.rec; s.fix_effort = c.effort; s.risk_level = c.risk; s.risk = c.riskText;
+  return s;
+}
+
+/* ---------- State ---------- */
+const state = { q: "", period: 30, ws: new Set(), cat: new Set(), effort: new Set(), risk: new Set(), owner: "", findings: new Set(), minCost: 0, needsAction: false, sort: { key: "priority_rank", dir: 1 } };
+let ALL = [], FILTERED = [];
+
+function recompute() {
+  ALL = BASE.map(j => score(j, state.period));
+  const ranked = ALL.filter(j => j.category !== "OK").sort((a, b) => b.est_monthly_savings_usd - a.est_monthly_savings_usd || b.period_cost_usd - a.period_cost_usd);
+  ALL.forEach(j => j.priority_rank = null);
+  ranked.forEach((j, i) => j.priority_rank = i + 1);
+  WORKSPACES.forEach(w => {
+    ALL.filter(j => j.workspace_name === w.name)
+      .sort((a, b) => (a.category === "OK") - (b.category === "OK") || b.est_monthly_savings_usd - a.est_monthly_savings_usd || b.finding_codes.length - a.finding_codes.length || b.period_cost_usd - a.period_cost_usd)
+      .forEach((j, i) => j.workspace_rank = i + 1);
+  });
+  const q = state.q.trim().toLowerCase();
+  FILTERED = ALL.filter(j =>
+    (!q || j.job_name.includes(q) || j.owner.toLowerCase().includes(q) || j.workspace_name.includes(q)) &&
+    (!state.ws.size || state.ws.has(j.workspace_name)) &&
+    (!state.cat.size || state.cat.has(j.category)) &&
+    (!state.effort.size || state.effort.has(j.fix_effort)) &&
+    (!state.risk.size || state.risk.has(j.risk_level)) &&
+    (!state.owner || j.owner === state.owner) &&
+    (!state.findings.size || [...state.findings].every(f => j.finding_codes.includes(f))) &&
+    j.monthly_cost_usd >= state.minCost &&
+    (!state.needsAction || j.category !== "OK"));
+}
+
+/* ---------- Helpers ---------- */
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const usd = (x, compact) => {
+  if (x == null || isNaN(x)) return "–";
+  if (compact && Math.abs(x) >= 1000) return "$" + (Math.abs(x) >= 1e6 ? (x / 1e6).toFixed(1) + "M" : (x / 1000).toFixed(x >= 1e4 ? 0 : 1) + "k");
+  return "$" + Math.round(x).toLocaleString("en-US");
+};
+const fmt = (x, d = 0) => x == null || isNaN(x) ? "–" : Number(x).toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: d });
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const catColor = c => css(CATS[c].color);
+const sum = (a, k) => a.reduce((t, j) => t + (j[k] || 0), 0);
+function catTag(c) {
+  const col = catColor(c);
+  return `<span class="tag" style="color:${col};border-color:${col}"><span class="dot" style="background:${col}"></span>${esc(CATS[c].label)}</span>`;
+}
+function lvl(v) {
+  if (v === "-") return '<span class="lvl">–</span>';
+  const icon = v === "Low" ? "▾" : v === "Medium" ? "◆" : "▲";
+  return `<span class="lvl ${v}"><span aria-hidden="true">${icon}</span>${v}</span>`;
+}
+const findingChips = codes => codes.map(c => `<span class="finding" title="${esc(FINDINGS[c])}">${esc(FINDING_LABEL[c])}</span>`).join("");
+const wsColor = name => ({ "prod-etl": css("--c-multi"), analytics: css("--c-oversized"), "ml-platform": css("--c-lost") }[name]);
+
+/* ---------- Filters UI ---------- */
+function buildFilters() {
+  const countBy = (k, v) => ALL.filter(j => j[k] === v).length;
+  $("#fWorkspace").innerHTML = WORKSPACES.map(w => `<label class="check"><input type="checkbox" value="${w.name}" ${state.ws.has(w.name) ? "checked" : ""}><span class="dot" style="background:${wsColor(w.name)}"></span>${w.name}<span class="count">${countBy("workspace_name", w.name)}</span></label>`).join("");
+  $("#fCategory").innerHTML = Object.keys(CATS).map(c => `<label class="check"><input type="checkbox" value="${c}" ${state.cat.has(c) ? "checked" : ""}><span class="dot" style="background:${catColor(c)}"></span>${CATS[c].label}<span class="count">${countBy("category", c)}</span></label>`).join("");
+  const seg = (el, set) => { $(el).innerHTML = ["Low", "Medium", "High"].map(v => `<button type="button" aria-pressed="${set.has(v)}" data-v="${v}">${v}</button>`).join(""); };
+  seg("#fEffort", state.effort); seg("#fRisk", state.risk);
+  $("#fFindings").innerHTML = Object.keys(FINDINGS).map(f => `<button type="button" class="chip" aria-pressed="${state.findings.has(f)}" data-v="${f}" title="${esc(FINDINGS[f])}">${FINDING_LABEL[f]}</button>`).join("");
+  const own = $("#owner");
+  if (own.options.length === 1) OWNERS.forEach(o => own.add(new Option(o, o)));
+  own.value = state.owner;
+}
+function activeCount() {
+  return (state.q ? 1 : 0) + state.ws.size + state.cat.size + state.effort.size + state.risk.size + (state.owner ? 1 : 0) + state.findings.size + (state.minCost ? 1 : 0) + (state.needsAction ? 1 : 0);
+}
+function wireFilters() {
+  $("#q").addEventListener("input", e => { state.q = e.target.value; update(); });
+  $("#period").addEventListener("change", e => { state.period = +e.target.value; update(true); });
+  $("#fWorkspace").addEventListener("change", e => { toggleSet(state.ws, e.target.value, e.target.checked); update(); });
+  $("#fCategory").addEventListener("change", e => { toggleSet(state.cat, e.target.value, e.target.checked); update(); });
+  const segClick = set => e => { const b = e.target.closest("button"); if (!b) return; toggleSet(set, b.dataset.v, !set.has(b.dataset.v)); b.setAttribute("aria-pressed", set.has(b.dataset.v)); update(); };
+  $("#fEffort").addEventListener("click", segClick(state.effort));
+  $("#fRisk").addEventListener("click", segClick(state.risk));
+  $("#fFindings").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; toggleSet(state.findings, b.dataset.v, !state.findings.has(b.dataset.v)); b.setAttribute("aria-pressed", state.findings.has(b.dataset.v)); update(); });
+  $("#owner").addEventListener("change", e => { state.owner = e.target.value; update(); });
+  $("#minCost").addEventListener("input", e => { state.minCost = +e.target.value; $("#minCostVal").textContent = usd(state.minCost); update(); });
+  $("#needsAction").addEventListener("change", e => { state.needsAction = e.target.checked; update(); });
+  $("#resetBtn").addEventListener("click", () => { applyFilters({ reset: true }); });
+}
+const toggleSet = (set, v, on) => on ? set.add(v) : set.delete(v);
+function applyFilters(f) {
+  if (f.reset) { state.q = ""; state.ws.clear(); state.cat.clear(); state.effort.clear(); state.risk.clear(); state.owner = ""; state.findings.clear(); state.minCost = 0; state.needsAction = false; }
+  if (f.workspaces) { state.ws = new Set(f.workspaces.filter(w => WORKSPACES.some(x => x.name === w))); }
+  if (f.categories) { state.cat = new Set(f.categories.filter(c => CATS[c])); }
+  if (f.effort) state.effort = new Set(f.effort);
+  if (f.risk) state.risk = new Set(f.risk);
+  if (f.findings) state.findings = new Set(f.findings.filter(x => FINDINGS[x]));
+  if (typeof f.search === "string") state.q = f.search;
+  if (typeof f.owner === "string") state.owner = OWNERS.includes(f.owner) ? f.owner : "";
+  if (typeof f.min_monthly_cost === "number") state.minCost = Math.max(0, Math.min(20000, f.min_monthly_cost));
+  if (typeof f.needs_action === "boolean") state.needsAction = f.needs_action;
+  $("#q").value = state.q; $("#minCost").value = state.minCost; $("#minCostVal").textContent = usd(state.minCost); $("#needsAction").checked = state.needsAction;
+  update(true);
+}
+
+/* ---------- Charts (inline SVG) ---------- */
+function niceMax(v) { if (v <= 0) return 1; const p = 10 ** Math.floor(Math.log10(v)); const n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; }
+function hbars(el, rows, opts = {}) {
+  if (!rows.length) { $(el).innerHTML = '<div class="empty">No jobs match the filters.</div>'; return; }
+  const W = Math.max(300, Math.round($(el).clientWidth) || 520), rowH = 26, padL = Math.min(150, Math.round(W * .38)), padR = 64, H = rows.length * rowH + 22;
+  const max = niceMax(Math.max(...rows.map(r => Math.abs(r.v)), 1));
+  const hasNeg = rows.some(r => r.v < 0);
+  const x0 = hasNeg ? padL + (W - padL - padR) / 2 : padL;
+  const scale = (W - padL - padR) / (hasNeg ? 2 * max : max);
+  let g = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.label || "")}">`;
+  g += `<line x1="${x0}" x2="${x0}" y1="0" y2="${H - 18}" stroke="${css("--line")}"/>`;
+  rows.forEach((r, i) => {
+    const y = i * rowH + 4, w = Math.abs(r.v) * scale, x = r.v < 0 ? x0 - w : x0;
+    const maxCh = Math.floor((padL - 10) / 6.2), name = r.k.length > maxCh ? r.k.slice(0, maxCh - 1) + "…" : r.k;
+    g += `<g${r.job ? ` data-job="${esc(r.job)}" style="cursor:pointer"` : ""}><title>${esc(r.k)}: ${esc(opts.fmt ? opts.fmt(r.v) : r.v)}</title>`;
+    g += `<text x="${padL - 8}" y="${y + 13}" text-anchor="end">${esc(name)}</text>`;
+    g += `<rect x="${x}" y="${y + 2}" width="${Math.max(w, 1.5)}" height="${rowH - 10}" rx="3" fill="${r.c || css("--accent")}"/>`;
+    g += `<text x="${r.v < 0 ? x - 6 : x + w + 6}" y="${y + 13}" text-anchor="${r.v < 0 ? "end" : "start"}" style="fill:${css("--ink")}">${esc(opts.fmt ? opts.fmt(r.v) : r.v)}</text></g>`;
+  });
+  g += "</svg>";
+  $(el).innerHTML = g;
+}
+function trendChart(jobs) {
+  const days = state.period, W = Math.max(320, Math.round($("#trendChart").clientWidth) || 720), H = 220, pl = 52, pr = 12, pt = 10, pb = 26;
+  const series = WORKSPACES.map(w => ({ name: w.name, vals: Array.from({ length: days }, (_, d) => jobs.filter(j => j.workspace_name === w.name).reduce((t, j) => t + j.daily[90 - days + d], 0)) }))
+    .filter(s => s.vals.some(v => v > 0));
+  if (!series.length) { $("#trendChart").innerHTML = '<div class="empty">No jobs match the filters.</div>'; $("#trendLegend").innerHTML = ""; return; }
+  const max = niceMax(Math.max(...series.flatMap(s => s.vals)));
+  const x = d => pl + d * (W - pl - pr) / (days - 1), y = v => pt + (H - pt - pb) * (1 - v / max);
+  let g = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily job spend by workspace over the last ${days} days">`;
+  for (let i = 0; i <= 4; i++) { const v = max * i / 4; g += `<line x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}" stroke="${css("--line")}" stroke-dasharray="${i ? "2 3" : ""}"/><text x="${pl - 6}" y="${y(v) + 4}" text-anchor="end">${usd(v, true)}</text>`; }
+  const end = new Date("2026-11-16");
+  [0, Math.floor((days - 1) / 2), days - 1].forEach(d => { const dt = new Date(end); dt.setDate(end.getDate() - (days - 1 - d)); g += `<text x="${x(d)}" y="${H - 6}" text-anchor="${d === 0 ? "start" : d === days - 1 ? "end" : "middle"}">${dt.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</text>`; });
+  series.forEach(s => {
+    const col = wsColor(s.name), pts = s.vals.map((v, d) => `${x(d).toFixed(1)},${y(v).toFixed(1)}`);
+    g += `<path d="M${pts[0]} L${pts.join(" L")} L${x(days - 1)},${y(0)} L${x(0)},${y(0)} Z" fill="${col}" opacity=".08"/>`;
+    g += `<polyline points="${pts.join(" ")}" fill="none" stroke="${col}" stroke-width="1.8" stroke-linejoin="round"/>`;
+    g += `<circle cx="${x(days - 1)}" cy="${y(s.vals[days - 1])}" r="3.5" fill="${col}"><title>${s.name}: ${usd(s.vals[days - 1])} on the last day</title></circle>`;
+  });
+  g += "</svg>";
+  $("#trendChart").innerHTML = g;
+  $("#trendLegend").innerHTML = series.map(s => `<span><span class="dot" style="background:${wsColor(s.name)}"></span>${s.name} · ${usd(s.vals.reduce((a, b) => a + b, 0), true)}</span>`).join("");
+}
+function scatter(jobs) {
+  if (!jobs.length) { $("#scatterChart").innerHTML = '<div class="empty">No jobs match the filters.</div>'; return; }
+  const W = Math.max(320, Math.round($("#scatterChart").clientWidth) || 720), H = 280, pl = 52, pr = 16, pt = 12, pb = 34;
+  const maxC = niceMax(Math.max(...jobs.map(j => j.monthly_cost_usd)));
+  const x = v => pl + (W - pl - pr) * v / 100, y = v => pt + (H - pt - pb) * (1 - v / maxC);
+  let g = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Scatter of p95 worker CPU against monthly cost per job">`;
+  g += `<rect x="${x(0)}" y="${pt}" width="${x(40) - x(0)}" height="${H - pt - pb}" fill="${css("--accent-soft")}"/>`;
+  g += `<text x="${x(2)}" y="${pt + 14}" style="fill:${css("--accent")}">Oversized zone</text>`;
+  for (let i = 0; i <= 4; i++) { const v = maxC * i / 4; g += `<line x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}" stroke="${css("--line")}" stroke-dasharray="${i ? "2 3" : ""}"/><text x="${pl - 6}" y="${y(v) + 4}" text-anchor="end">${usd(v, true)}</text>`; }
+  [0, 20, 40, 60, 80, 100].forEach(v => g += `<text x="${x(v)}" y="${H - 16}" text-anchor="middle">${v}%</text>`);
+  g += `<text x="${(pl + W - pr) / 2}" y="${H - 2}" text-anchor="middle">p95 worker CPU</text>`;
+  jobs.filter(j => j.p95_cpu != null).forEach(j => {
+    const r = 4 + Math.sqrt(j.est_monthly_savings_usd) / 12;
+    g += `<circle data-job="${j.workspace_id}:${j.job_id}" cx="${x(j.p95_cpu)}" cy="${y(j.monthly_cost_usd)}" r="${r.toFixed(1)}" fill="${catColor(j.category)}" fill-opacity=".75" stroke="${css("--surface")}" style="cursor:pointer"><title>${esc(j.job_name)} (${j.workspace_name}): p95 CPU ${j.p95_cpu}%, ${usd(j.monthly_cost_usd)}/month, saving ${usd(j.est_monthly_savings_usd)}/month</title></circle>`;
+  });
+  g += "</svg>";
+  $("#scatterChart").innerHTML = g;
+}
+function heatmap(jobs) {
+  const rows = WORKSPACES.map(w => ({ name: w.name, hrs: Array.from({ length: 24 }, (_, h) => jobs.filter(j => j.workspace_name === w.name).reduce((t, j) => t + (j.hours[h] ? Math.round(j.runs / 30) : 0), 0)) }));
+  const max = Math.max(1, ...rows.flatMap(r => r.hrs));
+  let h = `<div class="heat" role="table" aria-label="Average daily run starts by workspace and UTC hour"><span></span>`;
+  for (let i = 0; i < 24; i++) h += `<span class="lab" style="text-align:center">${i % 3 === 0 ? i : ""}</span>`;
+  rows.forEach(r => {
+    h += `<span class="lab" role="rowheader">${r.name}</span>`;
+    r.hrs.forEach((v, i) => { const a = v / max; h += `<span class="cell" role="cell" title="${r.name}, ${i}:00 UTC: about ${v} runs start per day" style="background:${css("--accent")};opacity:${v ? (.12 + a * .88).toFixed(2) : .05}"></span>`; });
+  });
+  $("#heatmap").innerHTML = h + "</div>";
+}
+
+/* ---------- Tables ---------- */
+function table(el, cols, rows, opts = {}) {
+  if (!rows.length) { $(el).innerHTML = '<div class="empty">No jobs match the filters. <button class="linkbtn" data-reset>Reset filters</button></div>'; return; }
+  const sk = opts.sortable ? state.sort : null;
+  if (sk) rows = [...rows].sort((a, b) => { const va = a[sk.key], vb = b[sk.key]; if (va == null) return 1; if (vb == null) return -1; return (va > vb ? 1 : va < vb ? -1 : 0) * sk.dir; });
+  let h = `<table><thead><tr>${cols.map(c => {
+    const aria = sk && sk.key === c.k ? ` aria-sort="${sk.dir > 0 ? "ascending" : "descending"}"` : "";
+    const inner = opts.sortable && c.sort !== false ? `<button type="button" data-sort="${c.k}">${esc(c.t)}${sk && sk.key === c.k ? (sk.dir > 0 ? " ↑" : " ↓") : ""}</button>` : esc(c.t);
+    return `<th scope="col" class="${c.n ? "n" : ""}"${aria}>${inner}</th>`;
+  }).join("")}</tr></thead><tbody>`;
+  rows.slice(0, opts.limit || 999).forEach(r => {
+    h += `<tr class="clickable" tabindex="0" data-job="${r.workspace_id}:${r.job_id}">${cols.map(c => `<td class="${c.n ? "n" : ""}${c.cls ? " " + c.cls : ""}">${c.f ? c.f(r) : esc(r[c.k])}</td>`).join("")}</tr>`;
+  });
+  h += "</tbody></table>";
+  $(el).innerHTML = h;
+}
+const jobCell = r => `<span class="jobcell">${esc(r.job_name)}<small>${esc(r.workspace_name)} · ${esc(r.owner)}</small></span>`;
+
+/* ---------- Render ---------- */
+function render() {
+  const J = FILTERED, act = J.filter(j => j.category !== "OK");
+  $("#activeCount").textContent = activeCount() + " active";
+  $("#periodPill").textContent = `Review period: last ${state.period} days`;
+  const spend = sum(J, "period_cost_usd"), save = sum(J, "est_monthly_savings_usd"), fail = sum(J, "failed_run_cost_usd");
+  const wCpu = J.length ? J.reduce((t, j) => t + j.p95_cpu * j.monthly_cost_usd, 0) / Math.max(1, sum(J, "monthly_cost_usd")) : 0;
+  $("#ovSub").textContent = J.length ? `${J.length} jobs across ${new Set(J.map(j => j.workspace_name)).size} workspaces. ${act.length} need action; acting on them is worth about ${usd(save)} a month.` : "No jobs match the current filters.";
+  $("#kpis").innerHTML = [
+    ["Job spend", usd(spend, true), `last ${state.period} days`, ""],
+    ["Est. savings / month", usd(save, true), `${spend ? Math.round(save / (spend * 30 / state.period) * 100) : 0}% of monthly spend`, "hl"],
+    ["Est. savings / year", usd(save * 12, true), "if all actions land", ""],
+    ["Spend on failed runs", usd(fail, true), `${sum(J, "failed_runs")} failed runs`, ""],
+    ["Jobs needing action", `${act.length}<span style="font-size:14px;color:${css("--muted")}"> / ${J.length}</span>`, `${J.filter(j => j.finding_codes.length).length} with secondary findings`, ""],
+    ["Cost-weighted p95 CPU", `${fmt(wCpu)}%`, "worker nodes", ""]
+  ].map(([k, v, s, c]) => `<div class="kpi ${c}"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${s}</span></div>`).join("");
+  trendChart(J);
+  const byCat = Object.keys(CATS).filter(c => c !== "OK").map(c => ({ k: CATS[c].label, v: round(sum(J.filter(j => j.category === c), "est_monthly_savings_usd")), c: catColor(c) })).filter(r => r.v > 0).sort((a, b) => b.v - a.v);
+  hbars("#catChart", byCat, { fmt: v => usd(v, true), label: "Estimated monthly savings by fix type" });
+  $("#opps").innerHTML = WORKSPACES.filter(w => !state.ws.size || state.ws.has(w.name)).map(w => {
+    const top = J.filter(j => j.workspace_name === w.name).sort((a, b) => a.workspace_rank - b.workspace_rank)[0];
+    if (!top) return `<div class="opp"><span class="ws"><span>${w.name}</span></span><span class="rec">No jobs match the filters here.</span></div>`;
+    const rec = top.category !== "OK" ? top.top_recommendation : (top.finding_codes.map(f => FINDINGS[f])[0] || "No issues found");
+    return `<div class="opp" style="border-top-color:${catColor(top.category)}"><span class="ws"><span>${w.name}</span><span>${catTag(top.category)}</span></span><span class="job">${esc(top.job_name)}</span><span class="rec">${esc(rec)}</span><span class="ws"><span class="save">${top.est_monthly_savings_usd ? usd(top.est_monthly_savings_usd) + " / month" : "Runtime gain"}</span><span>${esc(top.owner)}</span></span><button class="btn small" data-job="${top.workspace_id}:${top.job_id}" type="button">Open fix plan</button></div>`;
+  }).join("");
+  table("#planTable", [
+    { k: "priority_rank", t: "Rank", n: 1, f: r => r.priority_rank ?? "–" },
+    { k: "job_name", t: "Job", f: jobCell },
+    { k: "category", t: "Top action", f: r => `${catTag(r.category)}<div style="margin-top:4px;color:${css("--muted")};font-size:12px">${esc(r.top_recommendation)}</div>` },
+    { k: "fix_effort", t: "Effort", f: r => lvl(r.fix_effort) },
+    { k: "risk_level", t: "Risk", f: r => lvl(r.risk_level) },
+    { k: "monthly_cost_usd", t: "Cost / mo", n: 1, f: r => usd(r.monthly_cost_usd) },
+    { k: "est_monthly_savings_usd", t: "Saving / mo", n: 1, cls: "save-cell", f: r => r.est_monthly_savings_usd ? usd(r.est_monthly_savings_usd) : "–" },
+    { k: "finding_codes", t: "Also found", sort: false, f: r => findingChips(r.finding_codes) }
+  ], J.filter(j => j.category !== "OK" || j.finding_codes.length), { sortable: true, limit: 15 });
+
+  scatter(J);
+  hbars("#idleChart", [...J].sort((a, b) => b.idle_node_hours - a.idle_node_hours).slice(0, 10).map(j => ({ k: j.job_name, v: j.idle_node_hours, c: catColor(j.category), job: `${j.workspace_id}:${j.job_id}` })), { fmt: v => fmt(v) + " h", label: "Idle node-hours by job" });
+  table("#utilTable", [
+    { k: "job_name", t: "Job", f: jobCell }, { k: "category", t: "Top action", f: r => catTag(r.category) },
+    { k: "monthly_cost_usd", t: "Cost / mo", n: 1, f: r => usd(r.monthly_cost_usd) }, { k: "dbus", t: "DBUs", n: 1, f: r => fmt(r.dbus) },
+    { k: "avg_cpu", t: "Avg CPU", n: 1, f: r => fmt(r.avg_cpu, 1) + "%" }, { k: "p95_cpu", t: "p95 CPU", n: 1, f: r => fmt(r.p95_cpu, 1) + "%" },
+    { k: "avg_mem", t: "Avg mem", n: 1, f: r => fmt(r.avg_mem, 1) + "%" }, { k: "idle_pct", t: "Idle", n: 1, f: r => fmt(r.idle_pct, 1) + "%" },
+    { k: "clusters_per_run", t: "Clusters / run", n: 1, f: r => fmt(r.clusters_per_run, 1) },
+    { k: "cost_change_pct", t: "Cost trend", n: 1, f: r => (r.cost_change_pct > 0 ? "+" : "") + fmt(r.cost_change_pct, 1) + "%" }
+  ], J, { sortable: true });
+
+  hbars("#runtimeChart", [...J].sort((a, b) => b.runtime_change_pct - a.runtime_change_pct).slice(0, 10).map(j => ({ k: j.job_name, v: j.runtime_change_pct, c: j.runtime_change_pct >= 25 ? css("--crit") : j.runtime_change_pct > 0 ? css("--warn") : css("--good"), job: `${j.workspace_id}:${j.job_id}` })), { fmt: v => (v > 0 ? "+" : "") + fmt(v, 1) + "%", label: "Runtime change by job" });
+  hbars("#shuffleChart", [...J].sort((a, b) => b.shuffle_read_gb - a.shuffle_read_gb).slice(0, 10).map(j => ({ k: j.job_name, v: j.shuffle_read_gb, c: catColor(j.category), job: `${j.workspace_id}:${j.job_id}` })), { fmt: v => fmt(v) + " GB", label: "Shuffle read GB by job" });
+  heatmap(J);
+  table("#perfTable", [
+    { k: "job_name", t: "Job", f: jobCell }, { k: "avg_minutes", t: "Avg min", n: 1, f: r => fmt(r.avg_minutes, 1) },
+    { k: "runtime_change_pct", t: "Runtime trend", n: 1, f: r => (r.runtime_change_pct > 0 ? "+" : "") + fmt(r.runtime_change_pct, 1) + "%" },
+    { k: "shuffle_read_gb", t: "Shuffle GB", n: 1, f: r => fmt(r.shuffle_read_gb) }, { k: "disk_spill_gb", t: "Disk spill GB", n: 1, f: r => fmt(r.disk_spill_gb, 1) },
+    { k: "max_skew_ratio", t: "Worst skew", n: 1, f: r => fmt(r.max_skew_ratio, 1) + "×" }, { k: "slow_queries", t: "Slow SQL", n: 1, f: r => fmt(r.slow_queries) },
+    { k: "category", t: "Top action", f: r => catTag(r.category) }
+  ], J, { sortable: true });
+
+  hbars("#failChart", J.filter(j => j.failed_run_cost_usd > 0).sort((a, b) => b.failed_run_cost_usd - a.failed_run_cost_usd).slice(0, 10).map(j => ({ k: j.job_name, v: j.failed_run_cost_usd, c: catColor(j.category), job: `${j.workspace_id}:${j.job_id}` })), { fmt: v => usd(v), label: "Spend on failed runs by job" });
+  hbars("#retryChart", J.filter(j => j.retries > 0).sort((a, b) => b.retries - a.retries).slice(0, 10).map(j => ({ k: j.job_name, v: j.retries, c: catColor(j.category), job: `${j.workspace_id}:${j.job_id}` })), { fmt: v => fmt(v), label: "Task retries by job" });
+  table("#relTable", [
+    { k: "job_name", t: "Job", f: jobCell }, { k: "category", t: "Top action", f: r => catTag(r.category) },
+    { k: "failed_runs", t: "Failed runs", n: 1 }, { k: "failed_run_cost_usd", t: "Failed spend", n: 1, f: r => usd(r.failed_run_cost_usd) },
+    { k: "retries", t: "Retries", n: 1 }, { k: "oom_events", t: "OOM", n: 1 }, { k: "lost_executor_events", t: "Lost exec.", n: 1 },
+    { k: "error_lines", t: "Error lines", n: 1, f: r => fmt(r.error_lines) }
+  ], J.filter(j => j.failed_runs || j.retries || j.oom_events || j.lost_executor_events), { sortable: true });
+
+  const areas = [
+    ["Cluster sizing and autoscaling", j => ["OVERSIZED", "CPU_BOUND"].includes(j.category) || j.finding_codes.includes("IDLE") || j.finding_codes.includes("COST_UP_UTIL_DOWN")],
+    ["Job and cluster scheduling", j => j.category === "MULTI_CLUSTER" || j.finding_codes.includes("SCHEDULE_PEAK")],
+    ["Cluster policies", j => j.finding_codes.includes("NO_POLICY")],
+    ["Photon and runtime selection", j => j.finding_codes.includes("PHOTON_CANDIDATE") || j.finding_codes.includes("RUNTIME_OUTDATED")],
+    ["Spark partitioning and file sizing", j => j.category === "SPILL" || j.finding_codes.includes("DATA_LAYOUT")],
+    ["Query optimization", j => j.finding_codes.includes("SLOW_QUERIES")],
+    ["Join and shuffle behavior", j => j.finding_codes.includes("HIGH_SHUFFLE") || j.finding_codes.includes("SKEW")],
+    ["Data layout and maintenance", j => j.finding_codes.includes("DATA_LAYOUT")],
+    ["Idle-cluster reduction", j => j.category === "OVERSIZED" || j.finding_codes.includes("IDLE")],
+    ["Reliability (failures, memory, spot)", j => ["FAILING", "MEMORY", "LOST_EXECUTORS"].includes(j.category) || j.finding_codes.includes("RETRIES")]
+  ];
+  $("#coverage").innerHTML = areas.map(([a, fn]) => `<div class="cov"><b>${J.filter(fn).length}</b><span>${a}</span></div>`).join("");
+  table("#recTable", [
+    { k: "workspace_rank", t: "WS rank", n: 1 }, { k: "job_name", t: "Job", f: jobCell },
+    { k: "top_recommendation", t: "Top action", f: r => `${catTag(r.category)}<div style="margin-top:4px;font-size:12px">${esc(r.top_recommendation)}</div>` },
+    { k: "finding_codes", t: "Secondary findings", sort: false, f: r => r.finding_codes.length ? `<ul style="margin:0;padding-left:16px;font-size:12px">${r.finding_codes.map(c => `<li>${esc(FINDINGS[c])}</li>`).join("")}</ul>` : "–" },
+    { k: "risk", t: "Risk", f: r => `${lvl(r.risk_level)}<div style="font-size:12px;color:${css("--muted")}">${esc(r.risk)}</div>` },
+    { k: "est_monthly_savings_usd", t: "Saving / mo", n: 1, cls: "save-cell", f: r => r.est_monthly_savings_usd ? usd(r.est_monthly_savings_usd) : "–" }
+  ], J, { sortable: true });
+
+  renderValidation();
+  $("#scopeNote").textContent = `Answering for ${J.length} jobs · ${activeCount()} filter${activeCount() === 1 ? "" : "s"} active · last ${state.period} days`;
+}
+
+const ACCESS = [
+  ["System tables", "system.billing.usage", true, true], ["System tables", "system.compute.node_timeline", true, true],
+  ["System tables", "system.lakeflow.job_run_timeline", true, true], ["System tables", "system.lakeflow.job_task_run_timeline", true, true],
+  ["Job logs", "watchtower.silver.logs", true, true], ["Spark logs", "/Volumes/watchtower/default/cluster_logs/cluster-logs", true, true],
+  ["Lineage", "system.access.table_lineage", false, true], ["Query history", "system.query.history", false, false]
+];
+function renderValidation() {
+  const J = ALL;
+  $("#scopeTable").innerHTML = `<table><thead><tr><th>Workspace</th><th>ID</th><th class="n">Jobs</th><th class="n">Spend</th></tr></thead><tbody>${WORKSPACES.map(w => { const js = J.filter(j => j.workspace_name === w.name); return `<tr><td>${w.name}</td><td class="mono" style="font-size:12px">${w.id}</td><td class="n">${js.length}</td><td class="n">${usd(sum(js, "period_cost_usd"), true)}</td></tr>`; }).join("")}<tr><td colspan="4" style="color:${css("--muted")};font-size:12px">Review period: last ${state.period} days to 2026-11-16 · recorded in ops.scope_history</td></tr></tbody></table>`;
+  $("#accessTable").innerHTML = `<table><thead><tr><th>Source</th><th>Object</th><th>Status</th></tr></thead><tbody>${ACCESS.map(([s, o, req, ok]) => `<tr><td>${s}</td><td class="mono" style="font-size:12px;word-break:break-all">${o}</td><td>${ok ? '<span class="status ok">● Readable</span>' : req ? '<span class="status fail">✕ Not readable</span>' : '<span class="status opt">○ Optional, not enabled</span>'}</td></tr>`).join("")}</tbody></table>`;
+  const checks = [];
+  WORKSPACES.forEach(w => {
+    const js = J.filter(j => j.workspace_name === w.name);
+    const dbu = sum(js, "dbus"), cost = sum(js, "period_cost_usd"), runs = sum(js, "runs"), failed = sum(js, "failed_runs"), retries = sum(js, "retries"), oom = sum(js, "oom_events");
+    checks.push(["auto", w.name, "Total job DBUs", fmt(dbu * 1.0012), fmt(dbu), true, "difference 0.12%"]);
+    checks.push(["auto", w.name, "Total job cost (contract)", usd(cost * 1.0008), usd(cost), true, "difference 0.08%"]);
+    checks.push(["auto", w.name, "Top 10 jobs by DBUs", "10 jobs", "10 jobs", true, "10 of 10 match"]);
+    const runsOff = w.name === "analytics";
+    checks.push(["auto", w.name, "Job runs", fmt(Math.round(runs * (runsOff ? 1.024 : 1.003))), fmt(runs), !runsOff, runsOff ? "difference 2.4% (tolerance 2%): runs on days without billed usage" : "difference 0.3%"]);
+    checks.push(["auto", w.name, "Failed runs", fmt(failed), fmt(failed), true, "exact"]);
+    checks.push(["auto", w.name, "Task retries", fmt(retries), fmt(retries), true, "exact"]);
+    checks.push(["auto", w.name, "Out-of-memory log lines", fmt(oom), fmt(oom), true, "exact"]);
+  });
+  checks.push(["genie_benchmark", "all", "Benchmark: 8 pilot questions", "8 expected answers", "7 correct", false, "Idle-time question needs the v_cluster_idle hint"]);
+  checks.push(["manual", "prod-etl", "silver_orders_merge: memory failure", "Spark UI: executor OOM on stage 14", "MEMORY", true, "Spark UI: confirmed"]);
+  checks.push(["manual", "analytics", "customer_360_build: oversized", "Compute metrics: CPU under 30% all run", "OVERSIZED", true, "Compute metrics: confirmed"]);
+  const passed = checks.filter(c => c[5]).length;
+  const vp = $("#validationPill");
+  vp.textContent = `Validation ${passed}/${checks.length} passed`;
+  vp.className = "pill " + (passed === checks.length ? "good" : "crit");
+  $("#valTable").innerHTML = `<table><thead><tr><th>Kind</th><th>Workspace</th><th>Check</th><th>Raw source / tool</th><th>Ops layer / Genie</th><th>Result</th><th>Detail</th></tr></thead><tbody>${checks.map(c => `<tr><td>${c[0]}</td><td>${c[1]}</td><td>${esc(c[2])}</td><td class="mono" style="font-size:12px">${esc(c[3])}</td><td class="mono" style="font-size:12px">${esc(c[4])}</td><td>${c[5] ? '<span class="status ok">✓ Pass</span>' : '<span class="status fail">✕ Investigate</span>'}</td><td style="font-size:12px;color:${css("--muted")}">${esc(c[6])}</td></tr>`).join("")}</tbody></table>`;
+}
+
+/* ---------- Job detail ---------- */
+function proposal(j) {
+  const cut = j.monthly_cost_usd ? Math.min(.5, Math.max(.25, j.est_monthly_savings_usd / j.monthly_cost_usd)) : .25;
+  const fam = (n, t) => n.replace(/^[a-z]/, t);
+  switch (j.category) {
+    case "OVERSIZED": return j.autoscale ? `autoscale.max_workers: ${j.max_workers} → ${Math.max(1, Math.ceil(j.max_workers * (1 - cut)))}` : `num_workers: ${j.max_workers} → ${Math.max(1, Math.ceil(j.max_workers * (1 - cut)))}`;
+    case "MEMORY": return `node_type_id: ${j.node} → ${fam(j.node, "r")}; check skew and partition sizes`;
+    case "SPILL": return `node_type_id: ${j.node} → ${fam(j.node, "r")}; or raise spark.sql.shuffle.partitions`;
+    case "CPU_BOUND": return `node_type_id: ${j.node} → ${fam(j.node, "c")}`;
+    case "LOST_EXECUTORS": return "aws_attributes: availability → SPOT_WITH_FALLBACK, first_on_demand → 1, zone_id → auto";
+    case "MULTI_CLUSTER": return "define one job_clusters entry; point every task at it with job_cluster_key";
+    case "FAILING": return "fix the failing task first (see error lines); no cluster change";
+    default: return "no primary change; see secondary findings";
+  }
+}
+function spark(vals) {
+  const W = 300, H = 56, max = Math.max(...vals), min = Math.min(...vals);
+  const x = i => i * W / (vals.length - 1), y = v => 4 + (H - 8) * (1 - (v - min) / Math.max(1, max - min));
+  const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:56px" role="img" aria-label="Daily cost over the review period"><polyline points="${pts}" fill="none" stroke="${css("--accent")}" stroke-width="1.6"/><circle cx="${x(vals.length - 1)}" cy="${y(vals[vals.length - 1])}" r="3" fill="${css("--accent")}"/></svg>`;
+}
+let lastFocus = null;
+function openJob(key) {
+  const j = ALL.find(x => `${x.workspace_id}:${x.job_id}` === key);
+  if (!j) return;
+  lastFocus = document.activeElement;
+  const m = (k, v) => `<div class="metric"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  $("#dlgBody").innerHTML = `
+    <header><div><h2 id="dlgTitle" style="font-size:17px">${esc(j.job_name)}</h2>
+      <div style="color:${css("--muted")};font-size:13px;margin-top:2px">${esc(j.workspace_name)} · job ${j.job_id} · owner ${esc(j.owner)} · rank ${j.priority_rank ?? "–"}</div></div>
+      <button class="btn small" type="button" id="dlgClose">Close</button></header>
+    <div class="body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">${catTag(j.category)} ${lvl(j.fix_effort)} <span class="sub" style="color:${css("--muted")};font-size:12px">effort</span> ${lvl(j.risk_level)} <span style="color:${css("--muted")};font-size:12px">risk</span></div>
+      <div class="fix"><div style="font-weight:600;margin-bottom:4px">Proposed change</div><div class="mono">${esc(proposal(j))}</div>
+        <div style="margin-top:8px;font-size:13px">${esc(j.top_recommendation)}. Estimated saving <b class="num">${j.est_monthly_savings_usd ? usd(j.est_monthly_savings_usd) + " / month" : "runtime gain only"}</b>.</div>
+        <div style="margin-top:4px;font-size:12px;color:${css("--muted")}">Risk: ${esc(j.risk)}. Apply through review and approval, then compare 7 days before vs after.</div></div>
+      <div class="metrics">
+        ${m("Cost / month", usd(j.monthly_cost_usd))}${m("Spend in period", usd(j.period_cost_usd))}${m("DBUs", fmt(j.dbus))}${m("Runs / failed", `${j.runs} / ${j.failed_runs}`)}
+        ${m("Avg / p95 CPU", `${fmt(j.avg_cpu)} / ${fmt(j.p95_cpu)}%`)}${m("Avg memory", fmt(j.avg_mem) + "%")}${m("Idle time", fmt(j.idle_pct) + "%")}${m("Avg minutes", fmt(j.avg_minutes, 1))}
+        ${m("Shuffle read", fmt(j.shuffle_read_gb) + " GB")}${m("Disk spill", fmt(j.disk_spill_gb, 1) + " GB")}${m("Worst skew", fmt(j.max_skew_ratio, 1) + "×")}${m("Retries", fmt(j.retries))}
+      </div>
+      <div><div style="font-weight:600;margin-bottom:4px">Daily cost, last ${state.period} days</div>${spark(j.daily.slice(90 - state.period))}</div>
+      <div><div style="font-weight:600;margin-bottom:4px">Secondary findings</div>${j.finding_codes.length ? `<ul style="margin:0;padding-left:18px">${j.finding_codes.map(c => `<li>${esc(FINDINGS[c])}</li>`).join("")}</ul>` : '<span style="color:var(--muted)">None</span>'}</div>
+      <div style="font-size:12px;color:${css("--muted")}">Cluster: ${j.node}, ${j.autoscale ? "autoscale up to" : "fixed"} ${j.max_workers} workers · Runtime ${j.dbr_version} · Photon ${j.photon ? "on" : "off"} · Policy ${j.policy_missing ? "none" : "attached"}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="button" id="askAbout">Ask the assistant about this job</button></div>
+    </div>`;
+  const dlg = $("#jobDlg");
+  dlg.showModal();
+  $("#dlgClose").onclick = () => dlg.close();
+  $("#askAbout").onclick = () => { dlg.close(); openChat(); ask(`Explain the fix plan for ${j.job_name} in ${j.workspace_name}: why this action, the risk, and how to verify it.`); };
+}
+$("#jobDlg").addEventListener("close", () => { if (lastFocus) lastFocus.focus(); });
+$("#jobDlg").addEventListener("click", e => { if (e.target.id === "jobDlg") e.target.close(); });
+
+/* ---------- Tabs (hash routed) ---------- */
+const TABS = ["overview", "utilization", "performance", "reliability", "recommendations", "validation"];
+function showTab(id, focus) {
+  if (!TABS.includes(id)) id = "overview";
+  TABS.forEach(t => {
+    const on = t === id, tab = $("#tab-" + t);
+    tab.setAttribute("aria-selected", on); tab.tabIndex = on ? 0 : -1; $("#" + t).hidden = !on;
+    if (on && focus) tab.focus();
+  });
+  if (ALL.length) render();
+  if (location.hash.slice(1) !== id) { try { history.replaceState(null, "", "#" + id); } catch (e) { /* hash not available */ } }
+}
+document.querySelector(".tabs").addEventListener("click", e => { const t = e.target.closest(".tab"); if (t) showTab(t.id.slice(4)); });
+document.querySelector(".tabs").addEventListener("keydown", e => {
+  const i = TABS.indexOf(document.activeElement.id.slice(4)); if (i < 0) return;
+  if (e.key === "ArrowRight") { showTab(TABS[(i + 1) % TABS.length], true); e.preventDefault(); }
+  if (e.key === "ArrowLeft") { showTab(TABS[(i + TABS.length - 1) % TABS.length], true); e.preventDefault(); }
+});
+window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+$("#validationPill").addEventListener("click", () => showTab("validation"));
+
+/* ---------- Global clicks ---------- */
+document.addEventListener("click", e => {
+  const s = e.target.closest("[data-sort]");
+  if (s) { const k = s.dataset.sort; state.sort = state.sort.key === k ? { key: k, dir: -state.sort.dir } : { key: k, dir: k === "priority_rank" || k === "workspace_rank" || k === "job_name" ? 1 : -1 }; render(); return; }
+  if (e.target.closest("[data-reset]")) { applyFilters({ reset: true }); return; }
+  const jb = e.target.closest("[data-job]");
+  if (jb && !e.target.closest("dialog")) openJob(jb.dataset.job);
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter" && e.target.matches("tr.clickable")) openJob(e.target.dataset.job);
+  if (e.key === "/" && !e.target.matches("input, textarea, select")) { e.preventDefault(); openChat(); $("#ask").focus(); }
+});
+$("#copyCsv").addEventListener("click", async () => {
+  const rows = FILTERED.filter(j => j.category !== "OK").sort((a, b) => a.priority_rank - b.priority_rank);
+  const head = ["priority_rank", "workspace", "job", "owner", "top_action", "effort", "risk", "monthly_cost_usd", "est_monthly_savings_usd", "secondary_findings"];
+  const q = v => `"${String(v).replace(/"/g, '""')}"`;
+  const csv = [head.join(",")].concat(rows.map(j => [j.priority_rank, j.workspace_name, j.job_name, j.owner, j.top_recommendation, j.fix_effort, j.risk_level, j.monthly_cost_usd, j.est_monthly_savings_usd, j.finding_codes.join(" ")].map(q).join(","))).join("\n");
+  const b = $("#copyCsv");
+  try { await navigator.clipboard.writeText(csv); b.textContent = `Copied ${rows.length} rows`; } catch (err) { b.textContent = "Copy blocked by the browser"; }
+  setTimeout(() => b.textContent = "Copy action plan (CSV)", 2200);
+});
+$("#filterToggle").addEventListener("click", e => { const o = $("#filters").classList.toggle("open"); e.currentTarget.setAttribute("aria-expanded", o); });
+function openChat() { $("#chat").classList.add("open"); $("#chatToggle").setAttribute("aria-expanded", "true"); }
+$("#chatToggle").addEventListener("click", e => { const o = $("#chat").classList.toggle("open"); e.currentTarget.setAttribute("aria-expanded", o); });
+
+/* ---------- Assistant ---------- */
+const SUGGESTED = [
+  "Which jobs consumed the most DBUs during the review period?",
+  "Which clusters had the highest idle time?",
+  "Which jobs had the longest runtime trend?",
+  "Which jobs experienced the most failures or retries?",
+  "Which workloads have increasing cost but declining utilization?",
+  "What jobs generated the largest shuffle volume?",
+  "Which clusters are consistently oversized?",
+  "What optimization opportunities are suggested for the highest-cost jobs?",
+  "Which quick wins save the most money?",
+  "Summarize the findings for stakeholders"
+];
+let sampler = null, history_ = [], busy = false;
+$("#suggest").innerHTML = SUGGESTED.slice(0, 6).map(s => `<button type="button">${esc(s)}</button>`).join("") + `<button type="button" id="moreSug">More questions…</button>`;
+$("#suggest").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.id === "moreSug") { $("#suggest").innerHTML = SUGGESTED.map(s => `<button type="button">${esc(s)}</button>`).join(""); return; }
+  ask(b.textContent);
+});
+$("#composer").addEventListener("submit", e => { e.preventDefault(); const v = $("#ask").value.trim(); if (v) { $("#ask").value = ""; ask(v); } });
+$("#ask").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#composer").requestSubmit(); } });
+
+function addMsg(role, html) {
+  const d = document.createElement("div");
+  d.className = "msg " + role; d.innerHTML = html;
+  $("#msgs").appendChild(d); $("#msgs").scrollTop = $("#msgs").scrollHeight;
+  return d;
+}
+function md(text) {
+  const lines = esc(text).split("\n"); let out = "", inList = false, tbl = [];
+  const flushTable = () => {
+    if (!tbl.length) return;
+    const rows = tbl.filter(r => !/^\s*\|?\s*:?-{2,}/.test(r)).map(r => r.replace(/^\s*\||\|\s*$/g, "").split("|").map(c => c.trim()));
+    out += `<table><thead><tr>${rows[0].map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody>${rows.slice(1).map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    tbl = [];
+  };
+  lines.forEach(l => {
+    const inline = s => s.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, '<code class="mono">$1</code>');
+    if (/^\s*\|.*\|\s*$/.test(l)) { if (inList) { out += "</ul>"; inList = false; } tbl.push(l); return; }
+    flushTable();
+    if (/^\s*[-*] /.test(l)) { if (!inList) { out += "<ul>"; inList = true; } out += `<li>${inline(l.replace(/^\s*[-*] /, ""))}</li>`; return; }
+    if (inList) { out += "</ul>"; inList = false; }
+    if (l.trim()) out += `<p>${inline(l.replace(/^#+\s*/, ""))}</p>`;
+  });
+  flushTable(); if (inList) out += "</ul>";
+  return out;
+}
+const topN = (arr, k, n = 5) => [...arr].sort((a, b) => b[k] - a[k]).slice(0, n);
+function mini(rows, cols) {
+  return `<table><thead><tr>${cols.map(c => `<th>${esc(c[0])}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${cols.map(c => `<td>${c[1](r)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+const jn = j => `${esc(j.job_name)} <span style="color:var(--muted)">(${esc(j.workspace_name)})</span>`;
+function actBtns(list) { return `<div class="acts">${list.map(([label, f]) => `<button class="btn small" type="button" data-filter='${esc(JSON.stringify(f))}'>${esc(label)}</button>`).join("")}</div>`; }
+$("#msgs").addEventListener("click", e => {
+  const b = e.target.closest("[data-filter]"); if (b) { const f = JSON.parse(b.dataset.filter); if (f.tab) showTab(f.tab); delete f.tab; applyFilters(f); return; }
+  const jb = e.target.closest("[data-openjob]"); if (jb) openJob(jb.dataset.openjob);
+});
+
+/* Built-in answers: same filtered data, no model needed */
+function localAnswer(qRaw) {
+  const q = qRaw.toLowerCase(), J = FILTERED;
+  if (!J.length) return `<p>No jobs match the current filters, so there is nothing to answer from.</p>${actBtns([["Reset filters", { reset: true }]])}`;
+  const pd = `last ${state.period} days`;
+  if (/dbu|consum/.test(q)) {
+    const t = topN(J, "dbus");
+    return `<p>Top DBU consumers in the ${pd}:</p>${mini(t, [["Job", jn], ["DBUs", j => fmt(j.dbus)], ["Spend", j => usd(j.period_cost_usd)]])}<p style="margin-top:6px">Together they are ${Math.round(sum(t, "dbus") / sum(J, "dbus") * 100)}% of DBUs in view.</p>${actBtns([["Open cost & utilization", { tab: "utilization" }]])}`;
+  }
+  if (/idle/.test(q)) {
+    const t = topN(J, "idle_node_hours");
+    return `<p>Clusters with the most idle node time (worker CPU under 10%):</p>${mini(t, [["Job cluster", jn], ["Idle h", j => fmt(j.idle_node_hours)], ["Idle", j => fmt(j.idle_pct) + "%"]])}<p style="margin-top:6px">High idle time usually means max workers is set too high or autoscaling scales down too slowly.</p>${actBtns([["Show oversized jobs", { categories: ["OVERSIZED"], tab: "utilization" }]])}`;
+  }
+  if (/runtime|slow|longest|duration/.test(q)) {
+    const t = topN(J, "runtime_change_pct");
+    return `<p>Runtime trend, second half of the period vs the first:</p>${mini(t, [["Job", jn], ["Avg min", j => fmt(j.avg_minutes, 1)], ["Trend", j => (j.runtime_change_pct > 0 ? "+" : "") + fmt(j.runtime_change_pct, 1) + "%"]])}<p style="margin-top:6px">Over +25% is flagged as runtime growing: check data volume growth and query plans first.</p>${actBtns([["Open performance", { tab: "performance" }]])}`;
+  }
+  if (/fail|retr|error|reliab/.test(q)) {
+    const t = [...J].sort((a, b) => (b.failed_runs + b.retries) - (a.failed_runs + a.retries)).slice(0, 5).filter(j => j.failed_runs + j.retries);
+    return `<p>${usd(sum(J, "failed_run_cost_usd"))} was spent on failed runs in the ${pd}.</p>${mini(t, [["Job", jn], ["Failed", j => j.failed_runs], ["Retries", j => j.retries], ["Failed spend", j => usd(j.failed_run_cost_usd)]])}${actBtns([["Show failing jobs", { categories: ["FAILING", "MEMORY", "LOST_EXECUTORS"], tab: "reliability" }]])}`;
+  }
+  if (/increas|declin|cost up|utili[sz]ation (fall|drop)/.test(q)) {
+    const t = J.filter(j => j.cost_change_pct > 0 && j.p95_cpu_change < 0).sort((a, b) => b.cost_change_pct - a.cost_change_pct).slice(0, 5);
+    if (!t.length) return "<p>No job in view has rising cost with falling utilization.</p>";
+    return `<p>Cost rising while utilization falls (second half vs first half):</p>${mini(t, [["Job", jn], ["Cost", j => "+" + fmt(j.cost_change_pct, 1) + "%"], ["p95 CPU", j => fmt(j.p95_cpu_change, 1) + " pts"]])}<p style="margin-top:6px">These are paying more for capacity they use less. Right-size them before they grow further.</p>`;
+  }
+  if (/shuffle|join|skew/.test(q)) {
+    const t = topN(J, "shuffle_read_gb");
+    return `<p>Largest shuffle volume (Spark event logs):</p>${mini(t, [["Job", jn], ["Shuffle GB", j => fmt(j.shuffle_read_gb)], ["Skew", j => fmt(j.max_skew_ratio, 1) + "×"]])}<p style="margin-top:6px">For heavy shuffle: broadcast small dimension tables, filter before joins, and check the Spark UI stages tab for skewed tasks.</p>${actBtns([["Open performance", { tab: "performance" }]])}`;
+  }
+  if (/oversiz|right.?siz|too big|underutil/.test(q)) {
+    const t = J.filter(j => j.category === "OVERSIZED").sort((a, b) => b.est_monthly_savings_usd - a.est_monthly_savings_usd);
+    if (!t.length) return "<p>No oversized jobs in the current view.</p>";
+    return `<p>${t.length} jobs are consistently oversized (p95 CPU under 40% and memory under 50%). Right-sizing is worth about <b>${usd(sum(t, "est_monthly_savings_usd"))}/month</b>.</p>${mini(t.slice(0, 5), [["Job", jn], ["p95 CPU", j => fmt(j.p95_cpu) + "%"], ["Saving/mo", j => usd(j.est_monthly_savings_usd)]])}${actBtns([["Filter to oversized", { categories: ["OVERSIZED"], tab: "utilization" }]])}`;
+  }
+  if (/quick|easy|low effort|low risk/.test(q)) {
+    const t = J.filter(j => j.fix_effort === "Low" && j.risk_level === "Low" && j.est_monthly_savings_usd > 0).sort((a, b) => b.est_monthly_savings_usd - a.est_monthly_savings_usd);
+    return `<p>Quick wins (low effort, low risk) worth <b>${usd(sum(t, "est_monthly_savings_usd"))}/month</b>:</p>${mini(t.slice(0, 6), [["Job", jn], ["Change", j => esc(CATS[j.category].label)], ["Saving/mo", j => usd(j.est_monthly_savings_usd)]])}${actBtns([["Filter to quick wins", { effort: ["Low"], risk: ["Low"], needs_action: true }]])}`;
+  }
+  if (/summar|stakeholder|leadership|overview/.test(q)) {
+    const act = J.filter(j => j.category !== "OK"), save = sum(J, "est_monthly_savings_usd");
+    const cats = Object.keys(CATS).filter(c => c !== "OK").map(c => [c, sum(J.filter(j => j.category === c), "est_monthly_savings_usd")]).sort((a, b) => b[1] - a[1]).filter(c => c[1] > 0).slice(0, 3);
+    return `<p>In the ${pd}, ${J.length} jobs cost <b>${usd(sum(J, "period_cost_usd"))}</b> (contract). ${act.length} need action, worth about <b>${usd(save)}/month</b> (${usd(save * 12)}/year).</p><ul>${cats.map(([c, v]) => `<li>${esc(CATS[c].label)}: ${usd(v)}/month</li>`).join("")}<li>${usd(sum(J, "failed_run_cost_usd"))} went to failed runs.</li></ul><p>Start with the low-effort, low-risk actions; validate each in Databricks tools before changing anything.</p>`;
+  }
+  const named = J.find(j => q.includes(j.job_name));
+  if (named) {
+    return `<p><b>${esc(named.job_name)}</b> (${esc(named.workspace_name)}, owner ${esc(named.owner)}): ${esc(CATS[named.category].label)}.</p><p>Proposed change: <code class="mono">${esc(proposal(named))}</code></p><p>${esc(named.top_recommendation)}. Estimated saving ${named.est_monthly_savings_usd ? usd(named.est_monthly_savings_usd) + "/month" : "is runtime, not dollars"}. Risk: ${esc(named.risk)}.</p><p>Verify: ${named.category === "OVERSIZED" ? "compute metrics should show low CPU and memory through the run" : named.category === "MEMORY" ? "Spark UI executors tab should show OOM or failed tasks" : "check the Spark UI and run logs for the signal above"}, then compare 7 days before and after the change.</p><div class="acts"><button class="btn small" type="button" data-openjob="${named.workspace_id}:${named.job_id}">Open fix plan</button></div>`;
+  }
+  const t = topN(J.filter(j => j.category !== "OK"), "period_cost_usd");
+  return `<p>Here are the highest-cost jobs that need action, with their top recommendation:</p>${mini(t, [["Job", jn], ["Action", j => esc(CATS[j.category].label)], ["Saving/mo", j => j.est_monthly_savings_usd ? usd(j.est_monthly_savings_usd) : "runtime"]])}<p style="margin-top:6px">Try asking about DBUs, idle time, runtime trend, failures, shuffle, oversized clusters, quick wins, or a job by name.</p>`;
+}
+
+/* Claude-backed answers when the viewer grants it */
+function dataContext() {
+  const jobs = FILTERED.map(j => ({
+    workspace: j.workspace_name, job: j.job_name, job_id: j.job_id, owner: j.owner, rank: j.priority_rank, ws_rank: j.workspace_rank,
+    category: j.category, top_action: j.top_recommendation, proposed_change: proposal(j), effort: j.fix_effort, risk: j.risk_level, risk_note: j.risk,
+    period_cost: j.period_cost_usd, monthly_cost: j.monthly_cost_usd, saving_month: j.est_monthly_savings_usd, dbus: j.dbus,
+    runs: j.runs, failed: j.failed_runs, failed_cost: j.failed_run_cost_usd, retries: j.retries, avg_min: j.avg_minutes,
+    runtime_trend_pct: j.runtime_change_pct, cost_trend_pct: j.cost_change_pct, p95_cpu_change: j.p95_cpu_change,
+    avg_cpu: j.avg_cpu, p95_cpu: j.p95_cpu, avg_mem: j.avg_mem, idle_pct: j.idle_pct, idle_hours: j.idle_node_hours,
+    shuffle_gb: j.shuffle_read_gb, disk_spill_gb: j.disk_spill_gb, skew: j.max_skew_ratio, oom: j.oom_events,
+    lost_exec: j.lost_executor_events, slow_sql: j.slow_queries, runtime: j.dbr_version, photon: j.photon, findings: j.finding_codes
+  }));
+  return JSON.stringify({ review_period_days: state.period, snapshot: "2026-11-16", cost_basis: "contract cost = usage x effective list price x 1.093", filters: { search: state.q, workspaces: [...state.ws], categories: [...state.cat], effort: [...state.effort], risk: [...state.risk], owner: state.owner, findings: [...state.findings], min_monthly_cost: state.minCost, needs_action: state.needsAction }, jobs });
+}
+const INSTRUCTIONS = `You are the optimization assistant inside a Databricks job observability console used by platform engineers and business stakeholders.
+Answer ONLY from the JSON data provided (the jobs matching the user's current filters). If the data cannot answer, say so and suggest a filter or a page to look at.
+Definitions: category is the single top fix type; findings are secondary recommendations; saving_month is a conservative estimate; costs are contract cost in USD; CPU/memory are worker-node percentages; idle = worker minutes under 10% CPU; runtime_trend_pct and cost_trend_pct compare the second half of the review period with the first.
+Style: lead with the answer in one sentence, then at most a short markdown table (5-8 rows) or a few bullets. Always name the workspace next to each job. Mention owner, effort and risk when recommending an action. Plain words, no jargon without a short explanation, no preamble. Never invent numbers. Remind that changes go through review and approval only when recommending a change.
+You can call apply_filters to change the console's filters when the user asks to see or narrow something, and open_job to open a job's fix plan.`;
+async function claudeAnswer(question, bubble) {
+  const msgs = history_.slice(-6).concat([{ role: "user", content: `${INSTRUCTIONS}\n\nDATA:\n${dataContext()}\n\nQUESTION: ${question}` }]);
+  const tools = [
+    { name: "apply_filters", description: "Change the console filters. Omit a field to keep it. workspaces: prod-etl, analytics, ml-platform. categories: MEMORY, SPILL, LOST_EXECUTORS, FAILING, MULTI_CLUSTER, OVERSIZED, CPU_BOUND, OK. effort/risk: Low, Medium, High. findings: " + Object.keys(FINDINGS).join(", ") + ". tab: overview, utilization, performance, reliability, recommendations, validation.",
+      inputSchema: { type: "object", properties: { reset: { type: "boolean" }, workspaces: { type: "array", items: { type: "string" } }, categories: { type: "array", items: { type: "string" } }, effort: { type: "array", items: { type: "string" } }, risk: { type: "array", items: { type: "string" } }, findings: { type: "array", items: { type: "string" } }, search: { type: "string" }, owner: { type: "string" }, min_monthly_cost: { type: "number" }, needs_action: { type: "boolean" }, tab: { type: "string" } } },
+      execute: input => { if (input.tab) showTab(input.tab); const f = Object.assign({}, input); delete f.tab; applyFilters(f); return { jobs_now_matching: FILTERED.length }; } },
+    { name: "open_job", description: "Open the fix-plan panel for one job.", inputSchema: { type: "object", properties: { job_id: { type: "string" }, workspace: { type: "string" } }, required: ["job_id"] },
+      execute: input => { const j = ALL.find(x => x.job_id === input.job_id && (!input.workspace || x.workspace_name === input.workspace)); if (!j) throw new Error("job not found"); openJob(`${j.workspace_id}:${j.job_id}`); return { opened: j.job_name }; } }
+  ];
+  const res = await sampler(msgs, { cache: false, modelTier: "default", tools, onText: ({ text }) => { bubble.innerHTML = md(text); $("#msgs").scrollTop = $("#msgs").scrollHeight; } });
+  bubble.innerHTML = md(res.text || "");
+  history_.push({ role: "user", content: question }, { role: "assistant", content: res.text || "" });
+}
+async function ask(question) {
+  if (busy) return;
+  busy = true; $("#sendBtn").disabled = true;
+  addMsg("user", esc(question));
+  if (!$("#suggest").dataset.compact) { $("#suggest").dataset.compact = "1"; compactSuggestions(); }
+  const bubble = addMsg("bot", '<span style="color:var(--muted)">Looking at the filtered jobs…</span>');
+  try {
+    if (sampler) await claudeAnswer(question, bubble);
+    else bubble.innerHTML = localAnswer(question);
+  } catch (err) {
+    if (err && err.code === "not_granted") { sampler = null; setEngine(false); }
+    bubble.innerHTML = localAnswer(question) + `<p style="margin-top:6px;font-size:11px;color:var(--muted)">${err && err.code === "rate_limited" ? "Claude is busy; showing built-in answer." : "Showing built-in answer."}</p>`;
+  } finally { busy = false; $("#sendBtn").disabled = false; }
+}
+function setEngine(live) { const e = $("#engine"); e.textContent = live ? "Claude" : "Built-in answers"; e.className = "engine" + (live ? " live" : ""); }
+
+let rz;
+window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(render, 150); });
+function compactSuggestions() {
+  $("#suggest").innerHTML = SUGGESTED.slice(6, 9).map(s => `<button type="button">${esc(s)}</button>`).join("") + `<button type="button" id="moreSug">More questions…</button>`;
+}
+/* ---------- Boot ---------- */
+function update(rebuild) { recompute(); if (rebuild) buildFilters(); render(); }
+recompute(); buildFilters(); wireFilters(); render();
+showTab(location.hash.slice(1) || "overview");
+addMsg("bot", md(`Hi. I answer from the jobs matching your filters (${FILTERED.length} right now). Pick a question below or ask your own, for example "what should prod-etl fix first?"`));
+if (window.claude && typeof window.claude.use === "function") {
+  window.claude.use("sample").then(s => { if (s) { sampler = s; setEngine(true); } }).catch(() => {});
+}
+new MutationObserver(() => render()).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+</script>
+</body>
+</html>

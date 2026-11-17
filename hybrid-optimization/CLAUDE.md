@@ -35,6 +35,8 @@ Acceptance criteria map: docs/REQUIREMENTS_TRACEABILITY.md (keep it in sync).
   priority order) or `finding_codes` + message (secondary) -> dashboard/Genie/docs.
 - Dashboard JSON is generated: edit `tools/build_dashboard.py`, re-run, commit both.
 - Run `python3 tools/check.py` before committing (CI runs it; it never deploys).
+- The observability app: design reference is `app-prototype/index.html`; build plan, endpoints and
+  field mapping are in `app-prototype/HANDOFF_FOR_CLAUDE.md`. The app is read-only too.
 
 ## Not yet verified live
 
