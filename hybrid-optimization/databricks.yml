@@ -3,24 +3,42 @@ bundle:
   databricks_cli_version: ">=0.281.0"   # alerts v2
 
 include:
-  - resources/*.yml          # ops job (setup -> views -> daily snapshot) + alerts
+  - resources/*.yml          # ops job, alerts, dashboard
 
 variables:
   catalog:
     description: Catalog that holds Watchtower (bronze/silver) and the ops schema
     default: watchtower
-  workspace_id:
-    description: Numeric ID of the workspace being optimized (number after o= in its URL)
+  workspaces:
+    description: Workspaces in the pilot, as id:name pairs, comma-separated (id = number after o= in the URL)
+  review_start:
+    description: Review period start YYYY-MM-DD (empty = 30 days before review_end)
+    default: ""
+  review_end:
+    description: Review period end YYYY-MM-DD (empty = today, i.e. rolling)
+    default: ""
+  price_multiplier:
+    description: Contract multiplier on effective list price (cost = usage x effective_list x multiplier)
+    default: 1.093
+  idle_cpu_pct:
+    description: Worker node-minutes below this CPU percent count as idle
+    default: 10
+  latest_lts:
+    description: Current LTS Databricks Runtime your org targets (older runtimes are flagged)
+    default: "15.4"
+  eventlog_path:
+    description: Cluster log delivery root (same Volume Watchtower reads; event logs sit under <cluster_id>/eventlog/)
+    default: /Volumes/watchtower/default/cluster_logs/cluster-logs
+  layout_table_limit:
+    description: Max tables (written by in-scope jobs) whose file layout is checked per day
+    default: 50
   warehouse_id:
-    description: SQL warehouse used by the alerts and the Genie space
+    description: SQL warehouse used by the alerts, dashboard and Genie space
   job_sp:
     description: Service principal application ID the ops job runs as (prod)
     default: ""
   alert_email:
     description: Email (user) that receives SQL alert notifications
-  price_multiplier:
-    description: Contract multiplier on effective list price (cost = usage x effective_list x multiplier)
-    default: 1.093
   cost_spike_ratio:
     description: Alert when a job's daily cost exceeds its prior 7-day average by this factor
     default: 2
@@ -35,8 +53,7 @@ targets:
     workspace:
       host: https://<dev-workspace>.cloud.databricks.com
     variables:
-      catalog: watchtower
-      workspace_id: "<dev-workspace-id>"
+      workspaces: "<dev-workspace-id>:dev"
       warehouse_id: <dev-warehouse-id>
       alert_email: <you@company.com>
 
@@ -48,7 +65,9 @@ targets:
     run_as:
       service_principal_name: ${var.job_sp}
     variables:
-      catalog: watchtower
-      workspace_id: "<prod-workspace-id>"
+      # Pilot scope: every selected workspace in the same Unity Catalog metastore.
+      workspaces: "<prod-workspace-id>:prod,<second-workspace-id>:analytics"
+      review_start: "<YYYY-MM-DD>"
+      review_end: "<YYYY-MM-DD>"
       warehouse_id: <prod-warehouse-id>
       alert_email: <platform-oncall@company.com>

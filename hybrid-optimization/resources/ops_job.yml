@@ -3,9 +3,11 @@ resources:
     hybrid_ops:
       name: hybrid-optimization-ops
       description: >
-        Builds the read-only ops views over system tables + Watchtower logs and
-        appends one daily snapshot per job to an append-only history table.
-        Nothing in this job deletes or overwrites data.
+        Optimization pilot for the selected workspaces and review period. Records
+        scope and access evidence, ingests Spark event logs, builds read-only views
+        over system tables and logs, snapshots the scorecard and history, and
+        validates the results against raw sources. Nothing deletes or overwrites data,
+        and nothing changes any job or cluster.
       schedule:
         quartz_cron_expression: "0 37 5 * * ?"   # daily 05:37 ET, after Watchtower's hourly run
         timezone_id: America/New_York
@@ -17,10 +19,22 @@ resources:
       parameters:
         - name: catalog
           default: ${var.catalog}
-        - name: workspace_id
-          default: ${var.workspace_id}
-        - name: price_multiplier     # contract multiplier on effective list price
+        - name: workspaces
+          default: ${var.workspaces}
+        - name: review_start
+          default: ${var.review_start}
+        - name: review_end
+          default: ${var.review_end}
+        - name: price_multiplier
           default: ${var.price_multiplier}
+        - name: idle_cpu_pct
+          default: ${var.idle_cpu_pct}
+        - name: latest_lts
+          default: ${var.latest_lts}
+        - name: eventlog_path
+          default: ${var.eventlog_path}
+        - name: layout_table_limit
+          default: ${var.layout_table_limit}
         - name: snapshot_date        # empty = 2 days ago; set YYYY-MM-DD to backfill one day
           default: ""
 
@@ -36,31 +50,107 @@ resources:
             python_file: ../src/run_sql.py
             parameters:
               - "--catalog={{job.parameters.catalog}}"
-              - "--workspace_id={{job.parameters.workspace_id}}"
+              - "--workspaces={{job.parameters.workspaces}}"
+              - "--review_start={{job.parameters.review_start}}"
+              - "--review_end={{job.parameters.review_end}}"
               - "--price_multiplier={{job.parameters.price_multiplier}}"
+              - "--idle_cpu_pct={{job.parameters.idle_cpu_pct}}"
+              - "--latest_lts={{job.parameters.latest_lts}}"
               - "--files=00_setup.sql"
 
-        - task_key: build_views
+        - task_key: access_check
           depends_on:
             - task_key: setup
           environment_key: default
           spark_python_task:
-            python_file: ../src/run_sql.py
+            python_file: ../src/access_check.py
             parameters:
               - "--catalog={{job.parameters.catalog}}"
-              - "--workspace_id={{job.parameters.workspace_id}}"
+              - "--workspaces={{job.parameters.workspaces}}"
+              - "--review_start={{job.parameters.review_start}}"
+              - "--review_end={{job.parameters.review_end}}"
               - "--price_multiplier={{job.parameters.price_multiplier}}"
-              - "--files=10_views.sql"
+              - "--idle_cpu_pct={{job.parameters.idle_cpu_pct}}"
+              - "--latest_lts={{job.parameters.latest_lts}}"
+              - "--eventlog_path={{job.parameters.eventlog_path}}"
 
-        - task_key: daily_snapshot
+        - task_key: eventlog_ingest
           depends_on:
-            - task_key: build_views
+            - task_key: access_check
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/eventlog_ingest.py
+            parameters:
+              - "--catalog={{job.parameters.catalog}}"
+              - "--workspaces={{job.parameters.workspaces}}"
+              - "--review_start={{job.parameters.review_start}}"
+              - "--review_end={{job.parameters.review_end}}"
+              - "--price_multiplier={{job.parameters.price_multiplier}}"
+              - "--idle_cpu_pct={{job.parameters.idle_cpu_pct}}"
+              - "--latest_lts={{job.parameters.latest_lts}}"
+              - "--eventlog_path={{job.parameters.eventlog_path}}"
+
+        - task_key: build_views
+          depends_on:
+            - task_key: access_check
           environment_key: default
           spark_python_task:
             python_file: ../src/run_sql.py
             parameters:
               - "--catalog={{job.parameters.catalog}}"
-              - "--workspace_id={{job.parameters.workspace_id}}"
+              - "--workspaces={{job.parameters.workspaces}}"
+              - "--review_start={{job.parameters.review_start}}"
+              - "--review_end={{job.parameters.review_end}}"
               - "--price_multiplier={{job.parameters.price_multiplier}}"
+              - "--idle_cpu_pct={{job.parameters.idle_cpu_pct}}"
+              - "--latest_lts={{job.parameters.latest_lts}}"
+              - "--files=10_views.sql"
+
+        - task_key: table_layout
+          depends_on:
+            - task_key: build_views
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/table_layout.py
+            parameters:
+              - "--catalog={{job.parameters.catalog}}"
+              - "--workspaces={{job.parameters.workspaces}}"
+              - "--review_start={{job.parameters.review_start}}"
+              - "--review_end={{job.parameters.review_end}}"
+              - "--price_multiplier={{job.parameters.price_multiplier}}"
+              - "--idle_cpu_pct={{job.parameters.idle_cpu_pct}}"
+              - "--latest_lts={{job.parameters.latest_lts}}"
+              - "--limit={{job.parameters.layout_table_limit}}"
+
+        - task_key: daily_snapshot
+          depends_on:
+            - task_key: eventlog_ingest
+            - task_key: table_layout
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/run_sql.py
+            parameters:
+              - "--catalog={{job.parameters.catalog}}"
+              - "--workspaces={{job.parameters.workspaces}}"
+              - "--review_start={{job.parameters.review_start}}"
+              - "--review_end={{job.parameters.review_end}}"
+              - "--price_multiplier={{job.parameters.price_multiplier}}"
+              - "--idle_cpu_pct={{job.parameters.idle_cpu_pct}}"
+              - "--latest_lts={{job.parameters.latest_lts}}"
               - "--snapshot_date={{job.parameters.snapshot_date}}"
               - "--files=20_daily_snapshot.sql,21_scorecard_snapshot.sql"
+
+        - task_key: validate
+          depends_on:
+            - task_key: daily_snapshot
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/validate.py
+            parameters:
+              - "--catalog={{job.parameters.catalog}}"
+              - "--workspaces={{job.parameters.workspaces}}"
+              - "--review_start={{job.parameters.review_start}}"
+              - "--review_end={{job.parameters.review_end}}"
+              - "--price_multiplier={{job.parameters.price_multiplier}}"
+              - "--idle_cpu_pct={{job.parameters.idle_cpu_pct}}"
+              - "--latest_lts={{job.parameters.latest_lts}}"

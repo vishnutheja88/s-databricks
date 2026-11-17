@@ -5,10 +5,10 @@ resources:
   alerts:
     hybrid_memory_failures:
       display_name: "[hybrid] Jobs with out-of-memory events (24h)"
-      custom_summary: "Prod jobs whose driver logs show OOM errors or memory kills since yesterday"
+      custom_summary: "Jobs in scope whose driver logs show OOM errors or memory kills since yesterday"
       warehouse_id: ${var.warehouse_id}
       query_text: |
-        SELECT COUNT(DISTINCT job_id) AS jobs
+        SELECT COUNT(DISTINCT workspace_id, job_id) AS jobs
         FROM ${var.catalog}.ops.v_job_log_signals_daily
         WHERE log_date >= date_sub(current_date(), 1)
           AND oom_events > 0
@@ -31,7 +31,7 @@ resources:
 
     hybrid_failed_runs:
       display_name: "[hybrid] Failed job runs yesterday"
-      custom_summary: "Failed, errored or timed-out prod job runs that started yesterday"
+      custom_summary: "Failed, errored or timed-out job runs in scope that started yesterday"
       warehouse_id: ${var.warehouse_id}
       query_text: |
         SELECT COALESCE(SUM(failed_runs), 0) AS failed
@@ -60,16 +60,16 @@ resources:
       warehouse_id: ${var.warehouse_id}
       query_text: |
         WITH d AS (
-          SELECT job_id, usage_date, cost_usd
+          SELECT workspace_id, job_id, usage_date, cost_usd
           FROM ${var.catalog}.ops.v_job_cost_daily
           WHERE usage_date >= date_sub(current_date(), 9)
         ),
         x AS (
-          SELECT job_id,
+          SELECT workspace_id, job_id,
             MAX(CASE WHEN usage_date = date_sub(current_date(), 2) THEN cost_usd END) AS day_cost,
             AVG(CASE WHEN usage_date < date_sub(current_date(), 2) THEN cost_usd END) AS prior_avg
           FROM d
-          GROUP BY job_id
+          GROUP BY workspace_id, job_id
         )
         SELECT COUNT(*) AS spiking_jobs
         FROM x

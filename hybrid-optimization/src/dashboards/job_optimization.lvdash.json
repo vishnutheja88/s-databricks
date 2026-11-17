@@ -2,37 +2,80 @@
   "datasets": [
     {
       "name": "ds_kpi",
-      "displayName": "Executive KPIs (30 days)",
+      "displayName": "Executive KPIs (review period)",
       "queryLines": [
         "SELECT\n",
-        "  ROUND(SUM(cost_30d_usd), 0)                                   AS job_spend_30d,\n",
+        "  ROUND(SUM(period_cost_usd), 0)                                AS period_spend,\n",
         "  ROUND(SUM(est_monthly_savings_usd), 0)                        AS est_monthly_savings,\n",
         "  ROUND(SUM(est_annual_savings_usd), 0)                         AS est_annual_savings,\n",
-        "  ROUND(SUM(failed_run_cost_usd), 0)                            AS failed_run_spend_30d,\n",
+        "  ROUND(SUM(failed_run_cost_usd), 0)                            AS failed_run_spend,\n",
         "  COUNT_IF(category <> 'OK')                                    AS jobs_needing_action,\n",
-        "  COUNT(*)                                                      AS jobs_total\n",
+        "  COUNT_IF(size(finding_codes) > 0)                             AS jobs_with_findings,\n",
+        "  COUNT(*)                                                      AS jobs_total,\n",
+        "  COUNT(DISTINCT workspace_id)                                  AS workspaces\n",
         "FROM ops.v_job_scorecard_latest"
       ]
     },
     {
       "name": "ds_scorecard",
-      "displayName": "Job scorecard (30 days)",
+      "displayName": "Job scorecard (review period)",
       "queryLines": [
-        "SELECT priority_rank, job_name, job_id, category, top_recommendation, fix_effort,\n",
-        "       cost_30d_usd, est_monthly_savings_usd, est_annual_savings_usd,\n",
-        "       runs, failed_runs, failed_run_cost_usd, avg_minutes, clusters_per_run,\n",
-        "       avg_cpu, p95_cpu, avg_mem, max_swap,\n",
-        "       oom_events, spill_events, lost_executor_events, error_lines, photon\n",
+        "SELECT priority_rank, workspace_rank, workspace_name, job_name, job_id, owner, category, top_recommendation,\n",
+        "       fix_effort, risk_level, risk, secondary_findings, size(finding_codes) AS findings,\n",
+        "       period_cost_usd, monthly_cost_usd, est_monthly_savings_usd, est_annual_savings_usd, dbus,\n",
+        "       runs, failed_runs, failed_run_cost_usd, retries, runs_with_retries,\n",
+        "       avg_minutes, max_minutes, runtime_change_pct, cost_change_pct, p95_cpu_change,\n",
+        "       clusters_per_run, avg_cpu, p95_cpu, avg_mem, max_swap, node_hours, idle_node_hours, idle_pct,\n",
+        "       oom_events, spill_events, lost_executor_events, error_lines,\n",
+        "       shuffle_read_gb, shuffle_write_gb, disk_spill_gb, max_skew_ratio, slow_queries, spilled_queries,\n",
+        "       dbr_version, runtime_outdated, photon, policy_missing, small_file_tables, unmaintained_tables,\n",
+        "       layout_tables, schedule_peak, review_label\n",
         "FROM ops.v_job_scorecard_latest"
+      ]
+    },
+    {
+      "name": "ds_workspace",
+      "displayName": "Workspace summary",
+      "queryLines": [
+        "SELECT workspace_name, review_label, jobs_analyzed, jobs_needing_action, jobs_with_findings,\n",
+        "       period_cost_usd, est_monthly_savings_usd, failed_run_cost_usd,\n",
+        "       top_opportunity_job, top_opportunity, top_opportunity_monthly_savings_usd\n",
+        "FROM ops.v_workspace_summary_latest"
+      ]
+    },
+    {
+      "name": "ds_idle",
+      "displayName": "Cluster idle time (review period)",
+      "queryLines": [
+        "SELECT workspace_name, cluster_name, cluster_id, cluster_source, job_id,\n",
+        "       node_hours, idle_node_hours, idle_pct, cost_usd, est_idle_cost_usd\n",
+        "FROM ops.v_cluster_idle"
+      ]
+    },
+    {
+      "name": "ds_hotspots",
+      "displayName": "Run starts by hour (UTC)",
+      "queryLines": [
+        "SELECT workspace_name, start_hour_utc, runs_started, jobs, avg_runs_per_day, busy_rank\n",
+        "FROM ops.v_schedule_hotspots"
+      ]
+    },
+    {
+      "name": "ds_queries",
+      "displayName": "Slowest SQL queries (review period)",
+      "queryLines": [
+        "SELECT workspace_id, source_type, job_id, warehouse_id, start_time, duration_min, read_gb,\n",
+        "       spilled_gb, shuffle_read_gb, statement_preview\n",
+        "FROM ops.v_query_hotspots"
       ]
     },
     {
       "name": "ds_cost_trend",
       "displayName": "Daily job spend (90 days)",
       "queryLines": [
-        "SELECT c.usage_date, COALESCE(s.job_name, c.job_id) AS job_name, s.category, c.cost_usd\n",
+        "SELECT c.usage_date, s.workspace_name, COALESCE(s.job_name, c.job_id) AS job_name, s.category, c.cost_usd\n",
         "FROM ops.v_job_cost_daily c\n",
-        "LEFT JOIN ops.v_job_scorecard_latest s USING (job_id)\n",
+        "LEFT JOIN ops.v_job_scorecard_latest s ON s.workspace_id = c.workspace_id AND s.job_id = c.job_id\n",
         "WHERE c.usage_date >= current_date() - INTERVAL 90 DAYS"
       ]
     },
@@ -40,21 +83,52 @@
       "name": "ds_runtime_trend",
       "displayName": "Daily runs and runtime (90 days)",
       "queryLines": [
-        "SELECT h.run_date, COALESCE(s.job_name, h.job_id) AS job_name, h.runs, h.failed_runs, h.avg_minutes\n",
+        "SELECT h.run_date, s.workspace_name, COALESCE(s.job_name, h.job_id) AS job_name,\n",
+        "       h.runs, h.failed_runs, h.avg_minutes, h.max_minutes\n",
         "FROM ops.v_job_run_health_daily h\n",
-        "LEFT JOIN ops.v_job_scorecard_latest s USING (job_id)\n",
+        "LEFT JOIN ops.v_job_scorecard_latest s ON s.workspace_id = h.workspace_id AND s.job_id = h.job_id\n",
         "WHERE h.run_date >= current_date() - INTERVAL 90 DAYS"
       ]
     },
     {
       "name": "ds_signals_trend",
-      "displayName": "Daily log signals (30 days)",
+      "displayName": "Daily log signals (90 days)",
       "queryLines": [
-        "SELECT g.log_date, COALESCE(s.job_name, g.job_id) AS job_name,\n",
+        "SELECT g.log_date, s.workspace_name, COALESCE(s.job_name, g.job_id) AS job_name,\n",
         "       g.oom_events, g.spill_events, g.lost_executor_events, g.error_lines\n",
         "FROM ops.v_job_log_signals_daily g\n",
-        "LEFT JOIN ops.v_job_scorecard_latest s USING (job_id)\n",
-        "WHERE g.log_date >= current_date() - INTERVAL 30 DAYS"
+        "LEFT JOIN ops.v_job_scorecard_latest s ON s.workspace_id = g.workspace_id AND s.job_id = g.job_id\n",
+        "WHERE g.log_date >= current_date() - INTERVAL 90 DAYS"
+      ]
+    },
+    {
+      "name": "ds_scope",
+      "displayName": "Pilot scope",
+      "queryLines": [
+        "SELECT s.workspace_id, s.workspace_name, s.review_label, s.review_start, s.review_end, s.review_days,\n",
+        "       h.recorded_at AS scope_recorded_at, h.recorded_by\n",
+        "FROM ops.v_scope s\n",
+        "LEFT JOIN (SELECT * FROM ops.scope_history\n",
+        "           QUALIFY ROW_NUMBER() OVER (PARTITION BY workspace_id ORDER BY recorded_at DESC) = 1) h\n",
+        "  ON h.workspace_id = s.workspace_id"
+      ]
+    },
+    {
+      "name": "ds_access",
+      "displayName": "Access checks (latest)",
+      "queryLines": [
+        "SELECT checked_at, source, object_name, required, ok, detail, checked_by\n",
+        "FROM ops.access_checks\n",
+        "QUALIFY ROW_NUMBER() OVER (PARTITION BY object_name ORDER BY checked_at DESC) = 1"
+      ]
+    },
+    {
+      "name": "ds_validation",
+      "displayName": "Validation results (latest)",
+      "queryLines": [
+        "SELECT validated_at, kind, workspace_id, check_name, source_value, ops_value, passed, detail, validated_by\n",
+        "FROM ops.validation_results\n",
+        "QUALIFY ROW_NUMBER() OVER (PARTITION BY kind, workspace_id, check_name ORDER BY validated_at DESC) = 1"
       ]
     }
   ],
@@ -73,8 +147,8 @@
                   "datasetName": "ds_kpi",
                   "fields": [
                     {
-                      "name": "job_spend_30d",
-                      "expression": "`job_spend_30d`"
+                      "name": "period_spend",
+                      "expression": "`period_spend`"
                     }
                   ],
                   "disaggregated": true
@@ -86,8 +160,8 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "job_spend_30d",
-                  "displayName": "Job spend (30d, contract)",
+                  "fieldName": "period_spend",
+                  "displayName": "Job spend (review period, contract)",
                   "format": {
                     "type": "number-currency",
                     "currencyCode": "USD",
@@ -101,7 +175,7 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Job spend (30d, contract)"
+                "title": "Job spend (review period, contract)"
               }
             }
           },
@@ -220,8 +294,8 @@
                   "datasetName": "ds_kpi",
                   "fields": [
                     {
-                      "name": "failed_run_spend_30d",
-                      "expression": "`failed_run_spend_30d`"
+                      "name": "failed_run_spend",
+                      "expression": "`failed_run_spend`"
                     }
                   ],
                   "disaggregated": true
@@ -233,8 +307,8 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "failed_run_spend_30d",
-                  "displayName": "Spend on failed runs (30d)",
+                  "fieldName": "failed_run_spend",
+                  "displayName": "Spend on failed runs",
                   "format": {
                     "type": "number-currency",
                     "currencyCode": "USD",
@@ -248,7 +322,7 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Spend on failed runs (30d)"
+                "title": "Spend on failed runs"
               }
             }
           },
@@ -341,6 +415,63 @@
         },
         {
           "widget": {
+            "name": "save_by_ws",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "savings",
+                      "expression": "SUM(`est_monthly_savings_usd`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "workspace_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "workspace_name"
+                },
+                "y": {
+                  "fieldName": "savings",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "savings"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Est. monthly savings by workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
             "name": "save_by_cat",
             "queries": [
               {
@@ -390,8 +521,307 @@
             }
           },
           "position": {
-            "x": 0,
+            "x": 3,
             "y": 2,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "top_actions",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "priority_rank",
+                      "expression": "`priority_rank`"
+                    },
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "owner",
+                      "expression": "`owner`"
+                    },
+                    {
+                      "name": "top_recommendation",
+                      "expression": "`top_recommendation`"
+                    },
+                    {
+                      "name": "fix_effort",
+                      "expression": "`fix_effort`"
+                    },
+                    {
+                      "name": "risk_level",
+                      "expression": "`risk_level`"
+                    },
+                    {
+                      "name": "est_monthly_savings_usd",
+                      "expression": "`est_monthly_savings_usd`"
+                    },
+                    {
+                      "name": "est_annual_savings_usd",
+                      "expression": "`est_annual_savings_usd`"
+                    },
+                    {
+                      "name": "period_cost_usd",
+                      "expression": "`period_cost_usd`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "priority_rank",
+                    "displayName": "priority_rank"
+                  },
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "workspace_name"
+                  },
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "job_name"
+                  },
+                  {
+                    "fieldName": "owner",
+                    "displayName": "owner"
+                  },
+                  {
+                    "fieldName": "top_recommendation",
+                    "displayName": "top_recommendation"
+                  },
+                  {
+                    "fieldName": "fix_effort",
+                    "displayName": "fix_effort"
+                  },
+                  {
+                    "fieldName": "risk_level",
+                    "displayName": "risk_level"
+                  },
+                  {
+                    "fieldName": "est_monthly_savings_usd",
+                    "displayName": "est_monthly_savings_usd"
+                  },
+                  {
+                    "fieldName": "est_annual_savings_usd",
+                    "displayName": "est_annual_savings_usd"
+                  },
+                  {
+                    "fieldName": "period_cost_usd",
+                    "displayName": "period_cost_usd"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Prioritized action plan (rank 1 = do first)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 6,
+            "height": 8
+          }
+        }
+      ]
+    },
+    {
+      "name": "workspaces",
+      "displayName": "Workspaces",
+      "layout": [
+        {
+          "widget": {
+            "name": "ws_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_workspace",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "review_label",
+                      "expression": "`review_label`"
+                    },
+                    {
+                      "name": "jobs_analyzed",
+                      "expression": "`jobs_analyzed`"
+                    },
+                    {
+                      "name": "jobs_needing_action",
+                      "expression": "`jobs_needing_action`"
+                    },
+                    {
+                      "name": "jobs_with_findings",
+                      "expression": "`jobs_with_findings`"
+                    },
+                    {
+                      "name": "period_cost_usd",
+                      "expression": "`period_cost_usd`"
+                    },
+                    {
+                      "name": "est_monthly_savings_usd",
+                      "expression": "`est_monthly_savings_usd`"
+                    },
+                    {
+                      "name": "failed_run_cost_usd",
+                      "expression": "`failed_run_cost_usd`"
+                    },
+                    {
+                      "name": "top_opportunity_job",
+                      "expression": "`top_opportunity_job`"
+                    },
+                    {
+                      "name": "top_opportunity",
+                      "expression": "`top_opportunity`"
+                    },
+                    {
+                      "name": "top_opportunity_monthly_savings_usd",
+                      "expression": "`top_opportunity_monthly_savings_usd`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "workspace_name"
+                  },
+                  {
+                    "fieldName": "review_label",
+                    "displayName": "review_label"
+                  },
+                  {
+                    "fieldName": "jobs_analyzed",
+                    "displayName": "jobs_analyzed"
+                  },
+                  {
+                    "fieldName": "jobs_needing_action",
+                    "displayName": "jobs_needing_action"
+                  },
+                  {
+                    "fieldName": "jobs_with_findings",
+                    "displayName": "jobs_with_findings"
+                  },
+                  {
+                    "fieldName": "period_cost_usd",
+                    "displayName": "period_cost_usd"
+                  },
+                  {
+                    "fieldName": "est_monthly_savings_usd",
+                    "displayName": "est_monthly_savings_usd"
+                  },
+                  {
+                    "fieldName": "failed_run_cost_usd",
+                    "displayName": "failed_run_cost_usd"
+                  },
+                  {
+                    "fieldName": "top_opportunity_job",
+                    "displayName": "top_opportunity_job"
+                  },
+                  {
+                    "fieldName": "top_opportunity",
+                    "displayName": "top_opportunity"
+                  },
+                  {
+                    "fieldName": "top_opportunity_monthly_savings_usd",
+                    "displayName": "top_opportunity_monthly_savings_usd"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Top opportunity per workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "spend_by_ws",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_workspace",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "spend",
+                      "expression": "SUM(`period_cost_usd`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "workspace_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "workspace_name"
+                },
+                "y": {
+                  "fieldName": "spend",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "spend"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Spend by workspace (review period)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
             "width": 3,
             "height": 6
           }
@@ -411,11 +841,11 @@
                     },
                     {
                       "name": "cost",
-                      "expression": "SUM(`cost_30d_usd`)"
+                      "expression": "SUM(`period_cost_usd`)"
                     },
                     {
-                      "name": "category",
-                      "expression": "`category`"
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
                     }
                   ],
                   "disaggregated": false
@@ -444,134 +874,44 @@
                   "displayName": "cost"
                 },
                 "color": {
-                  "fieldName": "category",
+                  "fieldName": "workspace_name",
                   "scale": {
                     "type": "categorical"
                   },
-                  "displayName": "category"
+                  "displayName": "workspace_name"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Top jobs by 30-day spend (color = fix type)"
+                "title": "Top jobs by spend (color = workspace)"
               }
             }
           },
           "position": {
             "x": 3,
-            "y": 2,
+            "y": 6,
             "width": 3,
             "height": 6
-          }
-        },
-        {
-          "widget": {
-            "name": "top_actions",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_scorecard",
-                  "fields": [
-                    {
-                      "name": "priority_rank",
-                      "expression": "`priority_rank`"
-                    },
-                    {
-                      "name": "job_name",
-                      "expression": "`job_name`"
-                    },
-                    {
-                      "name": "top_recommendation",
-                      "expression": "`top_recommendation`"
-                    },
-                    {
-                      "name": "fix_effort",
-                      "expression": "`fix_effort`"
-                    },
-                    {
-                      "name": "est_monthly_savings_usd",
-                      "expression": "`est_monthly_savings_usd`"
-                    },
-                    {
-                      "name": "est_annual_savings_usd",
-                      "expression": "`est_annual_savings_usd`"
-                    },
-                    {
-                      "name": "cost_30d_usd",
-                      "expression": "`cost_30d_usd`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "priority_rank",
-                    "displayName": "priority_rank"
-                  },
-                  {
-                    "fieldName": "job_name",
-                    "displayName": "job_name"
-                  },
-                  {
-                    "fieldName": "top_recommendation",
-                    "displayName": "top_recommendation"
-                  },
-                  {
-                    "fieldName": "fix_effort",
-                    "displayName": "fix_effort"
-                  },
-                  {
-                    "fieldName": "est_monthly_savings_usd",
-                    "displayName": "est_monthly_savings_usd"
-                  },
-                  {
-                    "fieldName": "est_annual_savings_usd",
-                    "displayName": "est_annual_savings_usd"
-                  },
-                  {
-                    "fieldName": "cost_30d_usd",
-                    "displayName": "cost_30d_usd"
-                  }
-                ]
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Prioritized action list (rank 1 = do first)"
-              }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 8,
-            "width": 6,
-            "height": 8
           }
         }
       ]
     },
     {
       "name": "utilization",
-      "displayName": "Cluster utilization",
+      "displayName": "Cost & utilization",
       "layout": [
         {
           "widget": {
-            "name": "flt_cat_util",
+            "name": "flt_ws_util",
             "queries": [
               {
-                "name": "f_ds_scorecard_category",
+                "name": "f_ds_scorecard_workspace_name",
                 "query": {
                   "datasetName": "ds_scorecard",
                   "fields": [
                     {
-                      "name": "category",
-                      "expression": "`category`"
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
                     }
                   ],
                   "disaggregated": false
@@ -584,15 +924,15 @@
               "encodings": {
                 "fields": [
                   {
-                    "fieldName": "category",
-                    "displayName": "Fix type",
-                    "queryName": "f_ds_scorecard_category"
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace",
+                    "queryName": "f_ds_scorecard_workspace_name"
                   }
                 ]
               },
               "frame": {
                 "showTitle": true,
-                "title": "Fix type"
+                "title": "Workspace"
               }
             }
           },
@@ -662,7 +1002,365 @@
         },
         {
           "widget": {
-            "name": "mem_by_job",
+            "name": "idle_by_cluster",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_idle",
+                  "fields": [
+                    {
+                      "name": "cluster_name",
+                      "expression": "`cluster_name`"
+                    },
+                    {
+                      "name": "idle_hours",
+                      "expression": "SUM(`idle_node_hours`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "cluster_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "cluster_name"
+                },
+                "y": {
+                  "fieldName": "idle_hours",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "idle_hours"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Idle node-hours by cluster"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 1,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "util_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "category",
+                      "expression": "`category`"
+                    },
+                    {
+                      "name": "period_cost_usd",
+                      "expression": "`period_cost_usd`"
+                    },
+                    {
+                      "name": "dbus",
+                      "expression": "`dbus`"
+                    },
+                    {
+                      "name": "avg_cpu",
+                      "expression": "`avg_cpu`"
+                    },
+                    {
+                      "name": "p95_cpu",
+                      "expression": "`p95_cpu`"
+                    },
+                    {
+                      "name": "avg_mem",
+                      "expression": "`avg_mem`"
+                    },
+                    {
+                      "name": "max_swap",
+                      "expression": "`max_swap`"
+                    },
+                    {
+                      "name": "idle_pct",
+                      "expression": "`idle_pct`"
+                    },
+                    {
+                      "name": "clusters_per_run",
+                      "expression": "`clusters_per_run`"
+                    },
+                    {
+                      "name": "cost_change_pct",
+                      "expression": "`cost_change_pct`"
+                    },
+                    {
+                      "name": "p95_cpu_change",
+                      "expression": "`p95_cpu_change`"
+                    },
+                    {
+                      "name": "est_monthly_savings_usd",
+                      "expression": "`est_monthly_savings_usd`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "workspace_name"
+                  },
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "job_name"
+                  },
+                  {
+                    "fieldName": "category",
+                    "displayName": "category"
+                  },
+                  {
+                    "fieldName": "period_cost_usd",
+                    "displayName": "period_cost_usd"
+                  },
+                  {
+                    "fieldName": "dbus",
+                    "displayName": "dbus"
+                  },
+                  {
+                    "fieldName": "avg_cpu",
+                    "displayName": "avg_cpu"
+                  },
+                  {
+                    "fieldName": "p95_cpu",
+                    "displayName": "p95_cpu"
+                  },
+                  {
+                    "fieldName": "avg_mem",
+                    "displayName": "avg_mem"
+                  },
+                  {
+                    "fieldName": "max_swap",
+                    "displayName": "max_swap"
+                  },
+                  {
+                    "fieldName": "idle_pct",
+                    "displayName": "idle_pct"
+                  },
+                  {
+                    "fieldName": "clusters_per_run",
+                    "displayName": "clusters_per_run"
+                  },
+                  {
+                    "fieldName": "cost_change_pct",
+                    "displayName": "cost_change_pct"
+                  },
+                  {
+                    "fieldName": "p95_cpu_change",
+                    "displayName": "p95_cpu_change"
+                  },
+                  {
+                    "fieldName": "est_monthly_savings_usd",
+                    "displayName": "est_monthly_savings_usd"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Utilization detail"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 7,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "idle_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_idle",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "cluster_name",
+                      "expression": "`cluster_name`"
+                    },
+                    {
+                      "name": "cluster_source",
+                      "expression": "`cluster_source`"
+                    },
+                    {
+                      "name": "job_id",
+                      "expression": "`job_id`"
+                    },
+                    {
+                      "name": "node_hours",
+                      "expression": "`node_hours`"
+                    },
+                    {
+                      "name": "idle_node_hours",
+                      "expression": "`idle_node_hours`"
+                    },
+                    {
+                      "name": "idle_pct",
+                      "expression": "`idle_pct`"
+                    },
+                    {
+                      "name": "cost_usd",
+                      "expression": "`cost_usd`"
+                    },
+                    {
+                      "name": "est_idle_cost_usd",
+                      "expression": "`est_idle_cost_usd`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "workspace_name"
+                  },
+                  {
+                    "fieldName": "cluster_name",
+                    "displayName": "cluster_name"
+                  },
+                  {
+                    "fieldName": "cluster_source",
+                    "displayName": "cluster_source"
+                  },
+                  {
+                    "fieldName": "job_id",
+                    "displayName": "job_id"
+                  },
+                  {
+                    "fieldName": "node_hours",
+                    "displayName": "node_hours"
+                  },
+                  {
+                    "fieldName": "idle_node_hours",
+                    "displayName": "idle_node_hours"
+                  },
+                  {
+                    "fieldName": "idle_pct",
+                    "displayName": "idle_pct"
+                  },
+                  {
+                    "fieldName": "cost_usd",
+                    "displayName": "cost_usd"
+                  },
+                  {
+                    "fieldName": "est_idle_cost_usd",
+                    "displayName": "est_idle_cost_usd"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Clusters with the most idle time"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 14,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ]
+    },
+    {
+      "name": "performance",
+      "displayName": "Job performance",
+      "layout": [
+        {
+          "widget": {
+            "name": "flt_ws_perf",
+            "queries": [
+              {
+                "name": "f_ds_scorecard_workspace_name",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace",
+                    "queryName": "f_ds_scorecard_workspace_name"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "runtime_by_job",
             "queries": [
               {
                 "name": "main_query",
@@ -674,8 +1372,8 @@
                       "expression": "`job_name`"
                     },
                     {
-                      "name": "avg_mem",
-                      "expression": "AVG(`avg_mem`)"
+                      "name": "avg_minutes",
+                      "expression": "AVG(`avg_minutes`)"
                     }
                   ],
                   "disaggregated": false
@@ -697,16 +1395,73 @@
                   "displayName": "job_name"
                 },
                 "y": {
-                  "fieldName": "avg_mem",
+                  "fieldName": "avg_minutes",
                   "scale": {
                     "type": "quantitative"
                   },
-                  "displayName": "avg_mem"
+                  "displayName": "avg_minutes"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Avg worker memory % by job"
+                "title": "Average run minutes by job"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "shuffle_by_job",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "shuffle_gb",
+                      "expression": "SUM(`shuffle_read_gb`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "job_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "job_name"
+                },
+                "y": {
+                  "fieldName": "shuffle_gb",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "shuffle_gb"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Shuffle read GB by job (Spark event logs)"
               }
             }
           },
@@ -719,7 +1474,7 @@
         },
         {
           "widget": {
-            "name": "util_table",
+            "name": "perf_table",
             "queries": [
               {
                 "name": "main_query",
@@ -727,44 +1482,56 @@
                   "datasetName": "ds_scorecard",
                   "fields": [
                     {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
                       "name": "job_name",
                       "expression": "`job_name`"
                     },
                     {
-                      "name": "category",
-                      "expression": "`category`"
+                      "name": "avg_minutes",
+                      "expression": "`avg_minutes`"
                     },
                     {
-                      "name": "cost_30d_usd",
-                      "expression": "`cost_30d_usd`"
+                      "name": "max_minutes",
+                      "expression": "`max_minutes`"
                     },
                     {
-                      "name": "avg_cpu",
-                      "expression": "`avg_cpu`"
+                      "name": "runtime_change_pct",
+                      "expression": "`runtime_change_pct`"
                     },
                     {
-                      "name": "p95_cpu",
-                      "expression": "`p95_cpu`"
+                      "name": "shuffle_read_gb",
+                      "expression": "`shuffle_read_gb`"
                     },
                     {
-                      "name": "avg_mem",
-                      "expression": "`avg_mem`"
+                      "name": "shuffle_write_gb",
+                      "expression": "`shuffle_write_gb`"
                     },
                     {
-                      "name": "max_swap",
-                      "expression": "`max_swap`"
+                      "name": "disk_spill_gb",
+                      "expression": "`disk_spill_gb`"
                     },
                     {
-                      "name": "clusters_per_run",
-                      "expression": "`clusters_per_run`"
+                      "name": "max_skew_ratio",
+                      "expression": "`max_skew_ratio`"
                     },
                     {
-                      "name": "photon",
-                      "expression": "`photon`"
+                      "name": "spill_events",
+                      "expression": "`spill_events`"
                     },
                     {
-                      "name": "est_monthly_savings_usd",
-                      "expression": "`est_monthly_savings_usd`"
+                      "name": "slow_queries",
+                      "expression": "`slow_queries`"
+                    },
+                    {
+                      "name": "spilled_queries",
+                      "expression": "`spilled_queries`"
+                    },
+                    {
+                      "name": "top_recommendation",
+                      "expression": "`top_recommendation`"
                     }
                   ],
                   "disaggregated": true
@@ -777,50 +1544,62 @@
               "encodings": {
                 "columns": [
                   {
+                    "fieldName": "workspace_name",
+                    "displayName": "workspace_name"
+                  },
+                  {
                     "fieldName": "job_name",
                     "displayName": "job_name"
                   },
                   {
-                    "fieldName": "category",
-                    "displayName": "category"
+                    "fieldName": "avg_minutes",
+                    "displayName": "avg_minutes"
                   },
                   {
-                    "fieldName": "cost_30d_usd",
-                    "displayName": "cost_30d_usd"
+                    "fieldName": "max_minutes",
+                    "displayName": "max_minutes"
                   },
                   {
-                    "fieldName": "avg_cpu",
-                    "displayName": "avg_cpu"
+                    "fieldName": "runtime_change_pct",
+                    "displayName": "runtime_change_pct"
                   },
                   {
-                    "fieldName": "p95_cpu",
-                    "displayName": "p95_cpu"
+                    "fieldName": "shuffle_read_gb",
+                    "displayName": "shuffle_read_gb"
                   },
                   {
-                    "fieldName": "avg_mem",
-                    "displayName": "avg_mem"
+                    "fieldName": "shuffle_write_gb",
+                    "displayName": "shuffle_write_gb"
                   },
                   {
-                    "fieldName": "max_swap",
-                    "displayName": "max_swap"
+                    "fieldName": "disk_spill_gb",
+                    "displayName": "disk_spill_gb"
                   },
                   {
-                    "fieldName": "clusters_per_run",
-                    "displayName": "clusters_per_run"
+                    "fieldName": "max_skew_ratio",
+                    "displayName": "max_skew_ratio"
                   },
                   {
-                    "fieldName": "photon",
-                    "displayName": "photon"
+                    "fieldName": "spill_events",
+                    "displayName": "spill_events"
                   },
                   {
-                    "fieldName": "est_monthly_savings_usd",
-                    "displayName": "est_monthly_savings_usd"
+                    "fieldName": "slow_queries",
+                    "displayName": "slow_queries"
+                  },
+                  {
+                    "fieldName": "spilled_queries",
+                    "displayName": "spilled_queries"
+                  },
+                  {
+                    "fieldName": "top_recommendation",
+                    "displayName": "top_recommendation"
                   }
                 ]
               },
               "frame": {
                 "showTitle": true,
-                "title": "Utilization detail"
+                "title": "Slow jobs and Spark bottlenecks"
               }
             }
           },
@@ -828,7 +1607,173 @@
             "x": 0,
             "y": 7,
             "width": 6,
-            "height": 8
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "hotspots",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_hotspots",
+                  "fields": [
+                    {
+                      "name": "start_hour_utc",
+                      "expression": "`start_hour_utc`"
+                    },
+                    {
+                      "name": "runs",
+                      "expression": "SUM(`runs_started`)"
+                    },
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "start_hour_utc",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "start_hour_utc"
+                },
+                "y": {
+                  "fieldName": "runs",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "runs"
+                },
+                "color": {
+                  "fieldName": "workspace_name",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "workspace_name"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Run starts by hour of day (UTC)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 14,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "query_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_queries",
+                  "fields": [
+                    {
+                      "name": "workspace_id",
+                      "expression": "`workspace_id`"
+                    },
+                    {
+                      "name": "source_type",
+                      "expression": "`source_type`"
+                    },
+                    {
+                      "name": "job_id",
+                      "expression": "`job_id`"
+                    },
+                    {
+                      "name": "duration_min",
+                      "expression": "`duration_min`"
+                    },
+                    {
+                      "name": "read_gb",
+                      "expression": "`read_gb`"
+                    },
+                    {
+                      "name": "spilled_gb",
+                      "expression": "`spilled_gb`"
+                    },
+                    {
+                      "name": "shuffle_read_gb",
+                      "expression": "`shuffle_read_gb`"
+                    },
+                    {
+                      "name": "statement_preview",
+                      "expression": "`statement_preview`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "workspace_id",
+                    "displayName": "workspace_id"
+                  },
+                  {
+                    "fieldName": "source_type",
+                    "displayName": "source_type"
+                  },
+                  {
+                    "fieldName": "job_id",
+                    "displayName": "job_id"
+                  },
+                  {
+                    "fieldName": "duration_min",
+                    "displayName": "duration_min"
+                  },
+                  {
+                    "fieldName": "read_gb",
+                    "displayName": "read_gb"
+                  },
+                  {
+                    "fieldName": "spilled_gb",
+                    "displayName": "spilled_gb"
+                  },
+                  {
+                    "fieldName": "shuffle_read_gb",
+                    "displayName": "shuffle_read_gb"
+                  },
+                  {
+                    "fieldName": "statement_preview",
+                    "displayName": "statement_preview"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Slowest SQL queries (query history)"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 14,
+            "width": 3,
+            "height": 6
           }
         }
       ]
@@ -837,6 +1782,49 @@
       "name": "reliability",
       "displayName": "Reliability & root cause",
       "layout": [
+        {
+          "widget": {
+            "name": "flt_ws_rel",
+            "queries": [
+              {
+                "name": "f_ds_scorecard_workspace_name",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace",
+                    "queryName": "f_ds_scorecard_workspace_name"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
         {
           "widget": {
             "name": "failed_cost_by_job",
@@ -883,13 +1871,70 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Spend on failed runs by job (30d)"
+                "title": "Spend on failed runs by job"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 0,
+            "y": 1,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "retries_by_job",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "retries",
+                      "expression": "SUM(`retries`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "job_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "job_name"
+                },
+                "y": {
+                  "fieldName": "retries",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "retries"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Task retries by job"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 1,
             "width": 3,
             "height": 6
           }
@@ -942,10 +1987,10 @@
             }
           },
           "position": {
-            "x": 3,
-            "y": 0,
-            "width": 3,
-            "height": 6
+            "x": 0,
+            "y": 7,
+            "width": 6,
+            "height": 5
           }
         },
         {
@@ -957,6 +2002,10 @@
                 "query": {
                   "datasetName": "ds_scorecard",
                   "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
                     {
                       "name": "job_name",
                       "expression": "`job_name`"
@@ -972,6 +2021,10 @@
                     {
                       "name": "failed_run_cost_usd",
                       "expression": "`failed_run_cost_usd`"
+                    },
+                    {
+                      "name": "retries",
+                      "expression": "`retries`"
                     },
                     {
                       "name": "oom_events",
@@ -1008,6 +2061,10 @@
               "encodings": {
                 "columns": [
                   {
+                    "fieldName": "workspace_name",
+                    "displayName": "workspace_name"
+                  },
+                  {
                     "fieldName": "job_name",
                     "displayName": "job_name"
                   },
@@ -1022,6 +2079,10 @@
                   {
                     "fieldName": "failed_run_cost_usd",
                     "displayName": "failed_run_cost_usd"
+                  },
+                  {
+                    "fieldName": "retries",
+                    "displayName": "retries"
                   },
                   {
                     "fieldName": "oom_events",
@@ -1051,15 +2112,292 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Jobs with failures or log signals (open Watchtower Logs Dashboard for the lines)"
+                "title": "Jobs with failures, retries or log signals (Watchtower Logs Dashboard has the lines)"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 6,
+            "y": 12,
+            "width": 6,
+            "height": 7
+          }
+        }
+      ]
+    },
+    {
+      "name": "findings",
+      "displayName": "Recommendations",
+      "layout": [
+        {
+          "widget": {
+            "name": "flt_ws_find",
+            "queries": [
+              {
+                "name": "f_ds_scorecard_workspace_name",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "Workspace",
+                    "queryName": "f_ds_scorecard_workspace_name"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Workspace"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "findings_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "workspace_rank",
+                      "expression": "`workspace_rank`"
+                    },
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "owner",
+                      "expression": "`owner`"
+                    },
+                    {
+                      "name": "top_recommendation",
+                      "expression": "`top_recommendation`"
+                    },
+                    {
+                      "name": "secondary_findings",
+                      "expression": "`secondary_findings`"
+                    },
+                    {
+                      "name": "fix_effort",
+                      "expression": "`fix_effort`"
+                    },
+                    {
+                      "name": "risk_level",
+                      "expression": "`risk_level`"
+                    },
+                    {
+                      "name": "risk",
+                      "expression": "`risk`"
+                    },
+                    {
+                      "name": "est_monthly_savings_usd",
+                      "expression": "`est_monthly_savings_usd`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "workspace_rank",
+                    "displayName": "workspace_rank"
+                  },
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "workspace_name"
+                  },
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "job_name"
+                  },
+                  {
+                    "fieldName": "owner",
+                    "displayName": "owner"
+                  },
+                  {
+                    "fieldName": "top_recommendation",
+                    "displayName": "top_recommendation"
+                  },
+                  {
+                    "fieldName": "secondary_findings",
+                    "displayName": "secondary_findings"
+                  },
+                  {
+                    "fieldName": "fix_effort",
+                    "displayName": "fix_effort"
+                  },
+                  {
+                    "fieldName": "risk_level",
+                    "displayName": "risk_level"
+                  },
+                  {
+                    "fieldName": "risk",
+                    "displayName": "risk"
+                  },
+                  {
+                    "fieldName": "est_monthly_savings_usd",
+                    "displayName": "est_monthly_savings_usd"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Top action and secondary findings per job"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
             "width": 6,
             "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "config_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "dbr_version",
+                      "expression": "`dbr_version`"
+                    },
+                    {
+                      "name": "runtime_outdated",
+                      "expression": "`runtime_outdated`"
+                    },
+                    {
+                      "name": "photon",
+                      "expression": "`photon`"
+                    },
+                    {
+                      "name": "policy_missing",
+                      "expression": "`policy_missing`"
+                    },
+                    {
+                      "name": "schedule_peak",
+                      "expression": "`schedule_peak`"
+                    },
+                    {
+                      "name": "small_file_tables",
+                      "expression": "`small_file_tables`"
+                    },
+                    {
+                      "name": "unmaintained_tables",
+                      "expression": "`unmaintained_tables`"
+                    },
+                    {
+                      "name": "layout_tables",
+                      "expression": "`layout_tables`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "workspace_name"
+                  },
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "job_name"
+                  },
+                  {
+                    "fieldName": "dbr_version",
+                    "displayName": "dbr_version"
+                  },
+                  {
+                    "fieldName": "runtime_outdated",
+                    "displayName": "runtime_outdated"
+                  },
+                  {
+                    "fieldName": "photon",
+                    "displayName": "photon"
+                  },
+                  {
+                    "fieldName": "policy_missing",
+                    "displayName": "policy_missing"
+                  },
+                  {
+                    "fieldName": "schedule_peak",
+                    "displayName": "schedule_peak"
+                  },
+                  {
+                    "fieldName": "small_file_tables",
+                    "displayName": "small_file_tables"
+                  },
+                  {
+                    "fieldName": "unmaintained_tables",
+                    "displayName": "unmaintained_tables"
+                  },
+                  {
+                    "fieldName": "layout_tables",
+                    "displayName": "layout_tables"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Runtime, Photon, policy, schedule and data-layout signals"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 6,
+            "height": 7
           }
         }
       ]
@@ -1172,8 +2510,8 @@
                       "expression": "SUM(`cost_usd`)"
                     },
                     {
-                      "name": "category",
-                      "expression": "`category`"
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
                     }
                   ],
                   "disaggregated": false
@@ -1199,16 +2537,16 @@
                   "displayName": "cost"
                 },
                 "color": {
-                  "fieldName": "category",
+                  "fieldName": "workspace_name",
                   "scale": {
                     "type": "categorical"
                   },
-                  "displayName": "category"
+                  "displayName": "workspace_name"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Daily job spend by fix type (90d)"
+                "title": "Daily job spend by workspace (90d)"
               }
             }
           },
@@ -1325,6 +2663,298 @@
             "y": 7,
             "width": 3,
             "height": 6
+          }
+        }
+      ]
+    },
+    {
+      "name": "scope",
+      "displayName": "Scope & validation",
+      "layout": [
+        {
+          "widget": {
+            "name": "scope_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scope",
+                  "fields": [
+                    {
+                      "name": "workspace_id",
+                      "expression": "`workspace_id`"
+                    },
+                    {
+                      "name": "workspace_name",
+                      "expression": "`workspace_name`"
+                    },
+                    {
+                      "name": "review_label",
+                      "expression": "`review_label`"
+                    },
+                    {
+                      "name": "review_start",
+                      "expression": "`review_start`"
+                    },
+                    {
+                      "name": "review_end",
+                      "expression": "`review_end`"
+                    },
+                    {
+                      "name": "review_days",
+                      "expression": "`review_days`"
+                    },
+                    {
+                      "name": "scope_recorded_at",
+                      "expression": "`scope_recorded_at`"
+                    },
+                    {
+                      "name": "recorded_by",
+                      "expression": "`recorded_by`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "workspace_id",
+                    "displayName": "workspace_id"
+                  },
+                  {
+                    "fieldName": "workspace_name",
+                    "displayName": "workspace_name"
+                  },
+                  {
+                    "fieldName": "review_label",
+                    "displayName": "review_label"
+                  },
+                  {
+                    "fieldName": "review_start",
+                    "displayName": "review_start"
+                  },
+                  {
+                    "fieldName": "review_end",
+                    "displayName": "review_end"
+                  },
+                  {
+                    "fieldName": "review_days",
+                    "displayName": "review_days"
+                  },
+                  {
+                    "fieldName": "scope_recorded_at",
+                    "displayName": "scope_recorded_at"
+                  },
+                  {
+                    "fieldName": "recorded_by",
+                    "displayName": "recorded_by"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Pilot scope (workspaces and review period)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "access_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_access",
+                  "fields": [
+                    {
+                      "name": "source",
+                      "expression": "`source`"
+                    },
+                    {
+                      "name": "object_name",
+                      "expression": "`object_name`"
+                    },
+                    {
+                      "name": "required",
+                      "expression": "`required`"
+                    },
+                    {
+                      "name": "ok",
+                      "expression": "`ok`"
+                    },
+                    {
+                      "name": "detail",
+                      "expression": "`detail`"
+                    },
+                    {
+                      "name": "checked_at",
+                      "expression": "`checked_at`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "source",
+                    "displayName": "source"
+                  },
+                  {
+                    "fieldName": "object_name",
+                    "displayName": "object_name"
+                  },
+                  {
+                    "fieldName": "required",
+                    "displayName": "required"
+                  },
+                  {
+                    "fieldName": "ok",
+                    "displayName": "ok"
+                  },
+                  {
+                    "fieldName": "detail",
+                    "displayName": "detail"
+                  },
+                  {
+                    "fieldName": "checked_at",
+                    "displayName": "checked_at"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Access to system tables, Spark logs and job logs (latest check)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "validation_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_validation",
+                  "fields": [
+                    {
+                      "name": "kind",
+                      "expression": "`kind`"
+                    },
+                    {
+                      "name": "workspace_id",
+                      "expression": "`workspace_id`"
+                    },
+                    {
+                      "name": "check_name",
+                      "expression": "`check_name`"
+                    },
+                    {
+                      "name": "source_value",
+                      "expression": "`source_value`"
+                    },
+                    {
+                      "name": "ops_value",
+                      "expression": "`ops_value`"
+                    },
+                    {
+                      "name": "passed",
+                      "expression": "`passed`"
+                    },
+                    {
+                      "name": "detail",
+                      "expression": "`detail`"
+                    },
+                    {
+                      "name": "validated_at",
+                      "expression": "`validated_at`"
+                    },
+                    {
+                      "name": "validated_by",
+                      "expression": "`validated_by`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "kind",
+                    "displayName": "kind"
+                  },
+                  {
+                    "fieldName": "workspace_id",
+                    "displayName": "workspace_id"
+                  },
+                  {
+                    "fieldName": "check_name",
+                    "displayName": "check_name"
+                  },
+                  {
+                    "fieldName": "source_value",
+                    "displayName": "source_value"
+                  },
+                  {
+                    "fieldName": "ops_value",
+                    "displayName": "ops_value"
+                  },
+                  {
+                    "fieldName": "passed",
+                    "displayName": "passed"
+                  },
+                  {
+                    "fieldName": "detail",
+                    "displayName": "detail"
+                  },
+                  {
+                    "fieldName": "validated_at",
+                    "displayName": "validated_at"
+                  },
+                  {
+                    "fieldName": "validated_by",
+                    "displayName": "validated_by"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Validation: ops results vs raw sources, Genie benchmarks, profiling-tool checks"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 10,
+            "width": 6,
+            "height": 8
           }
         }
       ]

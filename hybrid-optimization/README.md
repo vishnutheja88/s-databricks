@@ -1,133 +1,123 @@
-# Hybrid Job Optimization (System Tables + Watchtower)
+# Hybrid Job Optimization Pilot (System Tables + Spark/Job Logs + Genie)
 
-Find which prod Lakeflow jobs waste money or capacity (system tables), then see
-**why** (Watchtower's parsed driver logs), in one per-job scorecard with a fix type,
-estimated monthly saving, effort and priority rank. Delivered as an AI/BI dashboard,
-a Genie space with business prompts, one fix-plan notebook, alerts and an
-append-only daily history. Business users start with [BUSINESS_GUIDE.md](BUSINESS_GUIDE.md).
+A Genie-assisted optimization pilot for **selected Databricks workspaces** over a **review period**.
+It reads system tables, Spark event logs and job (driver) logs, and produces one scorecard per job:
+cost, utilization, performance, a top action, secondary findings, estimated saving, effort, risk,
+owner and priority. Results are shown in an AI/BI dashboard, a Genie space, a fix-plan notebook and
+validation evidence. Engineers start with [BUSINESS_GUIDE.md](BUSINESS_GUIDE.md); acceptance
+criteria are mapped in [docs/REQUIREMENTS_TRACEABILITY.md](docs/REQUIREMENTS_TRACEABILITY.md).
 
-**No-delete by design:** raw logs are kept, Watchtower's tables can't be reset,
-the ops layer is views plus one `delta.appendOnly` table, and the SQL runner
-refuses DROP / DELETE / TRUNCATE / OVERWRITE / VACUUM / RESTORE.
+**No-delete, no-change by design:** raw logs are kept, Watchtower tables can't be reset, the ops
+layer is views plus `delta.appendOnly` tables, the SQL runner refuses DROP / DELETE / TRUNCATE /
+OVERWRITE / VACUUM / RESTORE, and nothing modifies a job or cluster. Recommended changes go through
+your normal review and approval.
 
-Complements `../workflow-observability` (multi-workspace, system tables only). This
-project targets one workspace (prod, all jobs on job clusters) and adds log signals.
+![Architecture](docs/architecture.svg)
 
-## How it fits together
+Details and design decisions: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-```
-prod job clusters --(cluster policy: log delivery)--> /Volumes/watchtower/default/cluster_logs
-        |                                                     |
-        |                                    Watchtower pipeline (hourly, retention OFF)
-        |                                                     v
-        |                                  watchtower.bronze.logs -> watchtower.silver.logs
-        v                                                     |
-system.compute.node_timeline  system.billing.usage/list_prices |   system.lakeflow.*
-        \__________________________ watchtower.ops views _____/
-                 v_job_cluster_map  (cluster_id -> job_id, job_run_id)
-                 v_job_utilization_daily | v_job_cost_daily | v_job_log_signals_daily
-                 v_job_run_health_daily  | v_job_scorecard_30d (top_recommendation)
-                                   |
-             hybrid-optimization-ops job (daily) -> ops.job_daily_history (append-only)
-                                   |
-   AI/BI dashboard  |  Genie space  |  3 SQL alerts  |  notebooks/optimization_insights.py (fix plan)
-```
+## Daily job (`hybrid-optimization-ops`, serverless)
+
+| Task | What it does | Writes (append-only) |
+| --- | --- | --- |
+| `setup` | Schema, checkpoint volume, evidence and store tables | creates only |
+| `access_check` | Records scope; checks every source is readable; stops if a required one isn't | `scope_history`, `access_checks` |
+| `eventlog_ingest` | Auto Loader over `<cluster_id>/eventlog/`: per-stage shuffle, spill, task-time skew | `spark_stage_metrics` |
+| `build_views` | Read-only views keyed by (workspace, job) | views only |
+| `table_layout` | DESCRIBE DETAIL / HISTORY for tables written by in-scope jobs (lineage) | `table_layout_snapshot` |
+| `daily_snapshot` | Daily metrics history + today's scorecard | `job_daily_history`, `job_scorecard_daily` |
+| `validate` | Re-computes key numbers straight from raw sources and compares | `validation_results` |
 
 ## Layout
 
 ```
-databricks.yml                   bundle, variables (catalog, workspace_id, warehouse_id...), dev/prod targets
-resources/ops_job.yml            setup -> build_views -> daily_snapshot (serverless, daily 05:37 ET)
-resources/alerts.yml             OOM jobs (24h), failed runs (yesterday), per-job cost spike
-resources/dashboard.yml          AI/BI dashboard "Job Optimization" (4 pages)
-src/run_sql.py                   runs SQL files; ${catalog} ${workspace_id} ${snapshot_date_expr}; no-delete guard
-src/sql/00_setup.sql             ops schema + append-only job_daily_history
-src/sql/10_views.sql             six read-only views
-src/sql/20_daily_snapshot.sql    idempotent daily INSERT into job_daily_history
-src/sql/21_scorecard_snapshot.sql  saves today's scorecard into job_scorecard_daily (read by dashboard/Genie)
-src/sql/90_verify_no_delete.sql  manual checks
+databricks.yml                     variables: workspaces, review period, multiplier, thresholds; dev/prod
+resources/ops_job.yml              the 7-task daily job above
+resources/alerts.yml               OOM jobs (24h), failed runs (yesterday), per-job cost spike
+resources/dashboard.yml            AI/BI dashboard "Job Optimization" (8 pages)
+src/common.py                      scope and parameter parsing shared by every task
+src/run_sql.py                     SQL runner with the no-delete guard
+src/access_check.py  src/eventlog_ingest.py  src/table_layout.py  src/validate.py
+src/sql/00_setup.sql               evidence and store tables
+src/sql/10_views.sql               scope, cost, utilization, idle, logs, runs, retries, Spark metrics,
+                                   SQL queries, lineage/layout, config, schedule, owners, daily metrics,
+                                   scorecard, workspace summary
+src/sql/20_daily_snapshot.sql      job_daily_history (append-only)
+src/sql/21_scorecard_snapshot.sql  job_scorecard_daily + latest views read by dashboard/Genie/notebook
+src/sql/90_verify_no_delete.sql    manual checks
 src/dashboards/job_optimization.lvdash.json   generated by tools/build_dashboard.py
-notebooks/optimization_insights.py   summary -> ranked actions -> fix plan -> root cause -> before/after
-tools/build_dashboard.py         regenerates the dashboard JSON
-tools/check.py                   offline static checks (also run by CI, validate only)
-tools/backfill.py                backfills job_daily_history day by day after first deploy
-BUSINESS_GUIDE.md                fix types, savings rules, the 4-step loop, Genie prompts
-src/genie/genie_space.json       Genie tables, instructions, sample questions
-src/genie/deploy_genie.py        create/update the Genie space (run as a human user)
+src/genie/genie_space.json         Genie tables, instructions, the 8 pilot questions
+src/genie/benchmarks.json          Genie benchmark questions with ground-truth SQL
+src/genie/deploy_genie.py          create/update the Genie space (run as a human user)
+notebooks/optimization_insights.py summary -> action plan -> fix plan -> root cause -> before/after
+notebooks/validate_findings.py     auto results, Genie benchmarks, manual profiling-tool checks
 policies/prod-job-cluster-policy.json   cluster log delivery to the Volume (nothing else)
-watchtower/no-delete.patch       hardens Watchtower (retention OFF, no reset, prevent_destroy)
-watchtower/prod-target.yml       Watchtower prod target with retention OFF
-watchtower/s3-lifecycle-transition.json   moves old raw logs to cheaper S3 tiers, never expires them
+watchtower/                        no-delete patch, prod target, S3 storage tiering
+docs/                              architecture, traceability, scope template, validation, report outline
+tools/build_dashboard.py  tools/check.py  tools/backfill.py
 ```
 
 ## Rollout
 
-1. **Prereqs.** Account admin enables `system.billing`, `system.compute`, `system.lakeflow`.
-   Catalog `watchtower` exists. The bucket behind its storage has no S3 Expiration rule.
-2. **Log delivery.** Merge `policies/prod-job-cluster-policy.json` into the policy your prod
-   jobs use. It only sets cluster log delivery (no init script, no spot changes).
-   Roll it out to one low-risk job first, confirm a folder appears under `cluster-logs/`,
-   then the rest. The jobs' run-as principal needs `READ VOLUME` + `WRITE VOLUME` on `cluster_logs`.
-3. **Watchtower.** Follow `watchtower/README.md` (apply the patch, add the prod target, deploy).
-   Check: `SELECT log_source, count(*) FROM watchtower.silver.logs GROUP BY 1`.
-4. **This bundle.** Fill the `<...>` values in `databricks.yml`, then:
+1. **Scope.** Fill in `docs/PILOT_SCOPE.md` and the prod target in `databricks.yml`:
+   `workspaces: "<id>:<name>,<id>:<name>"`, `review_start`, `review_end` (leave both empty for a rolling
+   30 days). All workspaces must share the Unity Catalog metastore that holds the `watchtower` catalog.
+2. **Prereqs.** Account admin enables `system.billing`, `system.compute`, `system.lakeflow`; optionally
+   `system.access` (lineage) and `system.query` (query history). The bucket behind the catalog has no
+   S3 Expiration rule.
+3. **Log delivery.** Merge `policies/prod-job-cluster-policy.json` into the policy your in-scope jobs
+   use (log delivery only). Roll out to one low-risk job first, confirm `cluster-logs/<cluster_id>/driver/`
+   and `/eventlog/` appear, then the rest. Run-as principals need `READ VOLUME` + `WRITE VOLUME`.
+4. **Watchtower.** Follow `watchtower/README.md` (patch, prod target, deploy).
+5. **Deploy this bundle** (through your change review):
 
    ```bash
    cd hybrid-optimization
    databricks bundle validate -t prod
    databricks bundle deploy   -t prod
    databricks bundle run hybrid_ops -t prod
-   # right after the first deploy, backfill history (node metrics have a limited retention window):
-   python3 tools/backfill.py --start 2026-09-01 --end 2026-11-14 --target prod
+   python3 tools/backfill.py --start <review_start> --end <review_end> --target prod   # history
    ```
 
-   The job's service principal needs SELECT on `system.billing`, `system.compute`,
-   `system.lakeflow` and `watchtower.silver`, plus USE/CREATE on `watchtower.ops`.
-5. **Genie.** `python src/genie/deploy_genie.py --catalog watchtower --warehouse-id <id>`
-   (as a human user; `--dry-run` to preview).
-6. **Dashboard.** Deployed by the bundle as "Job Optimization (prod)": Executive summary,
-   Cluster utilization, Reliability & root cause, Trends. Viewers need SELECT on `watchtower.ops`.
-   If a widget doesn't render, fix it in the UI, then pull it back with
-   `databricks bundle generate dashboard --resource job_optimization --watch`.
-7. **Fix plan.** Engineers run `notebooks/optimization_insights.py` (synced to the bundle's
-   workspace folder). Read-only; optional append to `ops.fix_plan_history`.
-8. **Verify.** Run `src/sql/90_verify_no_delete.sql`.
-9. **Access: engineers only.** Share the dashboard and Genie space with the platform/data
-   engineering group only, and grant that group SELECT on `watchtower.ops` and
-   `watchtower.silver` (raw log lines can contain sensitive values). Only the SP writes.
-10. **Storage tiering.** Apply `watchtower/s3-lifecycle-transition.json` to the bucket behind the
-   `cluster_logs` volume (see `watchtower/README.md`). It changes storage class only.
+   The job's service principal needs SELECT on the system schemas and `watchtower.silver`, USE/CREATE
+   on `watchtower.ops`, and READ VOLUME on the cluster log volume.
+6. **Check evidence.** Dashboard "Scope & validation": every required source OK, automated checks pass.
+7. **Genie.** `python src/genie/deploy_genie.py --catalog watchtower --warehouse-id <id>`; add
+   `src/genie/benchmarks.json` in the Benchmarks tab and record results (`docs/VALIDATION.md`).
+8. **Analyze and validate.** Run `notebooks/optimization_insights.py`; confirm each workspace's top
+   3 actions in Spark UI / compute metrics / query profile and record them in `notebooks/validate_findings.py`.
+9. **Present.** Build the stakeholder deck from `docs/PILOT_REPORT_OUTLINE.md`.
+10. **Access: engineers only.** Share the dashboard and Genie space with the engineering group; grant it
+    SELECT on `watchtower.ops` and `watchtower.silver` (log lines can hold sensitive values).
+11. **Storage tiering.** Apply `watchtower/s3-lifecycle-transition.json` (storage class only, never expires).
 
 ## Reading the scorecard
 
-`category` (fix type) and `top_recommendation` pick one action per job, in this order.
-`est_monthly_savings_usd`, `fix_effort` and `priority_rank` come with it (rules in BUSINESS_GUIDE.md):
+`category` is the single top action (priority order below); `secondary_findings` adds more
+recommendations without changing the ranking. Savings are normalized to 30 days at contract cost.
 
-| Signal | Change | Success check |
-| --- | --- | --- |
-| `oom_events > 0` or `max_swap > 5` | r-family workers or larger driver; AQE skew handling; more shuffle partitions | 0 OOM for 7 days |
-| `spill_events > 0` and `avg_mem > 70` | more shuffle partitions or more memory per core | spill drops, runtime falls |
-| `lost_executor_events > 0` | `SPOT_WITH_FALLBACK`, `first_on_demand >= 1`, `zone_id: auto` | 0 lost executors |
-| `failed_runs > 0` | fix the failure first (error lines in `silver.logs`) | 0 failed runs |
-| `clusters_per_run > 1` | share one cluster across tasks (`job_cluster_key`) | 1 cluster per run |
-| `p95_cpu < 40` and `avg_mem < 50` | cut `max_workers` 25-50% or one instance size down | cost down, runtime within ~10% |
-| `avg_cpu > 85` | c-family nodes or more workers; test Photon on SQL/DataFrame jobs | runtime falls |
+| Category | Signal | Change | Saving counted |
+| --- | --- | --- | --- |
+| MEMORY | OOM in logs or swap > 5% | r-family / larger driver, fix skew | failed-run spend |
+| SPILL | spill in logs with memory > 70%, or 10+ GB disk spill | more memory per core, shuffle partitions | 0 (runtime) |
+| LOST_EXECUTORS | lost executors in logs | SPOT_WITH_FALLBACK, first_on_demand >= 1 | failed-run spend |
+| FAILING | failed runs | fix the failure | failed-run spend |
+| MULTI_CLUSTER | > 1 cluster per run | shared `job_cluster_key` | 10% of cost |
+| OVERSIZED | p95 CPU < 40% and memory < 50% | fewer / smaller workers | cost x idle share, max 50% |
+| CPU_BOUND | avg CPU > 85% | c-family or more workers | 0 (runtime) |
 
-Change one thing per job, then compare 7 days before/after in `ops.job_daily_history`.
+Secondary findings: RETRIES, SKEW, HIGH_SHUFFLE, SLOW_QUERIES, DATA_LAYOUT, RUNTIME_OUTDATED,
+PHOTON_CANDIDATE, NO_POLICY, SCHEDULE_PEAK, IDLE, COST_UP_UTIL_DOWN, RUNTIME_GROWING.
 
 ## Caveats
 
-- Cost is **contract cost** = `usage_quantity x pricing.effective_list.default x price_multiplier`
-  (bundle variable, default 1.093). `list_cost_usd` stays as a reference column.
-- `node_timeline` covers classic compute only, and only worker nodes are measured
-  (single-node jobs show blank CPU/memory).
-- Watchtower reads driver logs only; the log patterns in `v_job_log_signals_daily` are
-  regexes and may need tuning to your log formats.
+- Cost is **contract cost** = `usage_quantity x pricing.effective_list.default x price_multiplier` (1.093).
 - Savings are conservative estimates, not guarantees.
-- The dashboard, Genie and the notebook read the latest saved scorecard
-  (`ops.v_job_scorecard_latest`), refreshed once a day. Until the first daily run, the
-  dashboard is empty; the notebook falls back to the live view.
-- Not yet run against a live workspace. Static checks passed (YAML/JSON parse, Python
-  compile, SQL parsed with sqlglot's databricks dialect, runner unit checks, dashboard
-  field references). The dashboard JSON is hand-generated; expect to fix minor column-name
-  or widget differences on first run.
+- SQL query signals cover SQL warehouse and serverless queries only; job-cluster Spark jobs rely on event logs.
+- Only worker nodes are measured for utilization; single-node jobs show blank CPU/memory.
+- Log patterns are regexes and may need tuning. Schedule hours are UTC.
+- The dashboard, Genie and notebook read the daily scorecard snapshot; until the first run the
+  dashboard is empty (the notebook falls back to the live view).
+- Not yet run against a live workspace. `tools/check.py` passes (YAML/JSON, Python, all SQL parsed
+  with sqlglot's databricks dialect, no-delete guard, dashboard field references). Expect to fix minor
+  column-name differences on first run; optional sources fall back to empty views instead of failing.

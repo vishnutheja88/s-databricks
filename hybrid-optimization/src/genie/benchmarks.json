@@ -1,0 +1,37 @@
+{
+  "purpose": "Genie benchmark set for the pilot. Add each question with its ground-truth SQL in the Genie space (Benchmarks tab), run the benchmark, and record the result with notebooks/validate_findings.py (kind = genie_benchmark). Replace ${catalog} with your catalog.",
+  "benchmarks": [
+    {
+      "question": "Which jobs consumed the most DBUs during the review period?",
+      "sql": "SELECT workspace_name, job_name, dbus FROM ${catalog}.ops.v_job_scorecard_latest ORDER BY dbus DESC LIMIT 10"
+    },
+    {
+      "question": "Which clusters had the highest idle time?",
+      "sql": "SELECT workspace_name, cluster_name, idle_node_hours, idle_pct, est_idle_cost_usd FROM ${catalog}.ops.v_cluster_idle ORDER BY idle_node_hours DESC LIMIT 10"
+    },
+    {
+      "question": "Which jobs had the longest runtime trend?",
+      "sql": "SELECT workspace_name, job_name, avg_minutes, runtime_change_pct FROM ${catalog}.ops.v_job_scorecard_latest WHERE runtime_change_pct IS NOT NULL ORDER BY runtime_change_pct DESC LIMIT 10"
+    },
+    {
+      "question": "Which jobs experienced the most failures or retries?",
+      "sql": "SELECT workspace_name, job_name, failed_runs, retries, failed_run_cost_usd FROM ${catalog}.ops.v_job_scorecard_latest ORDER BY failed_runs + retries DESC LIMIT 10"
+    },
+    {
+      "question": "Which workloads have increasing cost but declining utilization?",
+      "sql": "SELECT workspace_name, job_name, cost_change_pct, p95_cpu_change, period_cost_usd FROM ${catalog}.ops.v_job_scorecard_latest WHERE cost_change_pct > 0 AND p95_cpu_change < 0 ORDER BY cost_change_pct DESC LIMIT 10"
+    },
+    {
+      "question": "What jobs generated the largest shuffle volume?",
+      "sql": "SELECT workspace_name, job_name, shuffle_read_gb, shuffle_write_gb FROM ${catalog}.ops.v_job_scorecard_latest ORDER BY shuffle_read_gb DESC LIMIT 10"
+    },
+    {
+      "question": "Which clusters are consistently oversized?",
+      "sql": "SELECT workspace_name, job_name, p95_cpu, avg_mem, worker_node_type, max_workers, est_monthly_savings_usd FROM ${catalog}.ops.v_job_scorecard_latest WHERE category = 'OVERSIZED' ORDER BY est_monthly_savings_usd DESC"
+    },
+    {
+      "question": "What optimization opportunities are suggested for the highest-cost jobs?",
+      "sql": "SELECT workspace_name, job_name, period_cost_usd, top_recommendation, secondary_findings, est_monthly_savings_usd, owner FROM ${catalog}.ops.v_job_scorecard_latest ORDER BY period_cost_usd DESC LIMIT 10"
+    }
+  ]
+}

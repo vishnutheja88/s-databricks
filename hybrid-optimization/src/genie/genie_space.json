@@ -1,42 +1,69 @@
 {
   "title": "Hybrid Job Optimization",
-  "description": "Ask which prod jobs waste capacity or money, and why, using system tables plus Watchtower driver logs.",
+  "description": "Engineers ask about cost drivers, performance bottlenecks and optimization opportunities across the pilot workspaces, using system tables plus Spark and job logs. Access: engineering group only.",
   "tables": [
     {
       "identifier": "${catalog}.ops.v_job_scorecard_latest",
-      "description": "One row per prod job over the last 30 days: list cost, DBUs, runs, failed runs, spend on failed runs, avg minutes, clusters per run, worker CPU/memory/swap, OOM/spill/lost-executor/error counts from logs, category (fix type), top_recommendation, fix_effort, est_monthly_savings_usd, est_annual_savings_usd and priority_rank (1 = do first).",
+      "description": "One row per job per workspace for the review period (latest daily snapshot): period and monthly cost, DBUs, runs, failed runs and their cost, retries, avg/max minutes, runtime/cost/CPU trends (second half vs first half), clusters per run, worker CPU/memory/swap, idle node-hours and idle_pct, OOM/spill/lost-executor/error counts (driver logs), shuffle and spill GB and max_skew_ratio (Spark event logs), slow/spilled SQL queries, runtime version, Photon, policy, schedule and data-layout flags, category (top fix type), top_recommendation, secondary_findings, fix_effort, risk_level, risk, owner, est_monthly_savings_usd, est_annual_savings_usd, priority_rank (global) and workspace_rank.",
       "example_value_columns": [
+        "workspace_name",
         "job_name",
         "category",
         "top_recommendation",
-        "fix_effort"
+        "fix_effort",
+        "risk_level",
+        "owner"
+      ]
+    },
+    {
+      "identifier": "${catalog}.ops.v_workspace_summary_latest",
+      "description": "One row per workspace: jobs analyzed, jobs needing action, spend, estimated monthly savings, spend on failed runs, and the top opportunity (job, recommendation, saving).",
+      "example_value_columns": [
+        "workspace_name"
+      ]
+    },
+    {
+      "identifier": "${catalog}.ops.v_cluster_idle",
+      "description": "One row per cluster in the review period: workspace, cluster name and source, job_id, node-hours, idle node-hours (CPU below the idle threshold), idle_pct, cost and estimated idle cost.",
+      "example_value_columns": [
+        "workspace_name",
+        "cluster_name",
+        "cluster_source"
       ]
     },
     {
       "identifier": "${catalog}.ops.job_daily_history",
-      "description": "Append-only daily snapshot per job (snapshot_date): cost, utilization, log signals and run health. Use for trends and before/after comparisons of a change.",
+      "description": "Append-only daily metrics per job (metric_date): cost, DBUs, utilization, idle, runs, failures, retries, minutes, log signals, shuffle, spill, skew, SQL signals. Use for trends and before/after comparisons.",
       "example_value_columns": [
+        "workspace_name",
         "job_name"
       ]
     },
     {
-      "identifier": "${catalog}.ops.v_job_cost_daily",
-      "description": "Daily DBUs per job_id with cost_usd (contract cost, the number to report) and list_cost_usd (effective list, reference). Join to v_job_scorecard_latest on job_id for job_name. Use for cost growth and trend questions.",
-      "example_value_columns": []
+      "identifier": "${catalog}.ops.v_job_daily_metrics",
+      "description": "Same daily metrics as job_daily_history computed live (last 120 days). Use when history does not cover the period yet.",
+      "example_value_columns": [
+        "workspace_name",
+        "job_name"
+      ]
     },
     {
-      "identifier": "${catalog}.ops.v_job_log_signals_daily",
-      "description": "Per job per day: oom_events, spill_events, lost_executor_events, error_lines and runs_with_logs, parsed from driver logs by Watchtower.",
-      "example_value_columns": []
+      "identifier": "${catalog}.ops.v_schedule_hotspots",
+      "description": "Runs started per workspace per UTC hour of day in the review period; busy_rank 1 is the busiest hour.",
+      "example_value_columns": [
+        "workspace_name"
+      ]
     },
     {
-      "identifier": "${catalog}.ops.v_job_utilization_daily",
-      "description": "Per job per day: worker-node avg_cpu, p95_cpu, avg_mem, max_swap (percent) and number of clusters.",
-      "example_value_columns": []
+      "identifier": "${catalog}.ops.v_query_hotspots",
+      "description": "Top 100 slowest SQL queries per workspace in the review period (query history): source type, job_id, duration, bytes read, spilled and shuffled, statement preview.",
+      "example_value_columns": [
+        "source_type"
+      ]
     },
     {
       "identifier": "${catalog}.silver.logs",
-      "description": "Parsed driver log lines from Watchtower: cluster_id, log_source (stdout/stderr/log4j), log_level, log_ts, log_msg. Join to ops.v_job_cluster_map on cluster_id to get job_id and job_run_id.",
+      "description": "Parsed driver log lines from Watchtower: cluster_id, log_source (stdout/stderr/log4j), log_level, log_ts, log_msg. Join to ops.v_job_cluster_map on cluster_id for workspace_id, job_id and job_run_id.",
       "example_value_columns": [
         "log_source",
         "log_level"
@@ -44,31 +71,38 @@
     },
     {
       "identifier": "${catalog}.ops.v_job_cluster_map",
-      "description": "Maps cluster_id to job_id and job_run_id (last 90 days).",
+      "description": "Maps cluster_id to workspace_id, job_id, job_run_id and task_key (last 90 days).",
       "example_value_columns": []
+    },
+    {
+      "identifier": "${catalog}.ops.v_scope",
+      "description": "Pilot scope: workspace ids and names, review_start, review_end, review_label, review_days.",
+      "example_value_columns": [
+        "workspace_name"
+      ]
     }
   ],
   "instructions": [
-    "All data is from the prod workspace. Costs are contract cost in USD: usage x effective list price x our contract multiplier (1.093). list_cost_usd is reference only; report cost_usd / cost_30d_usd.",
-    "est_monthly_savings_usd and est_annual_savings_usd are conservative estimates, not guaranteed savings. Call them 'estimated'.",
-    "category is the fix type: MEMORY, SPILL, LOST_EXECUTORS, FAILING, MULTI_CLUSTER, OVERSIZED, CPU_BOUND or OK. Use top_recommendation to explain it in plain words.",
-    "priority_rank orders the work: 1 is the job to fix first. Jobs with category OK have no rank.",
-    "CPU and memory are worker-node percentages. p95_cpu below 40 with avg_mem below 50 means the cluster is oversized.",
-    "oom_events, spill_events and lost_executor_events come from driver logs parsed by Watchtower.",
-    "Show job_name, not job_id. Round money to whole dollars. 'Last month' means the last 30 days.",
-    "For trends over time, or comparing before and after a change, use job_daily_history.",
-    "To show log lines for a job, join silver.logs to ops.v_job_cluster_map on cluster_id, filter by the job's job_id from v_job_scorecard_latest."
+    "Scope is the pilot workspaces and review period in ops.v_scope. 'During the review period' means review_start to review_end; v_job_scorecard_latest already covers exactly that period.",
+    "Costs are contract cost in USD: usage x effective list price x our contract multiplier (1.093). Report cost columns, not list_cost columns.",
+    "est_monthly_savings_usd and est_annual_savings_usd are conservative estimates normalized to 30 days, not guaranteed savings. Call them estimated.",
+    "category is the single top fix type (MEMORY, SPILL, LOST_EXECUTORS, FAILING, MULTI_CLUSTER, OVERSIZED, CPU_BOUND or OK). secondary_findings lists further recommendations (retries, skew, shuffle, slow SQL, data layout, runtime, Photon, policy, schedule, idle, cost-vs-utilization, runtime growth).",
+    "priority_rank orders all work (1 = first); workspace_rank orders work within one workspace. Always show workspace_name next to job_name: job IDs repeat across workspaces.",
+    "CPU and memory are worker-node percentages. Oversized means p95_cpu below 40 and avg_mem below 50. Idle time is in v_cluster_idle (per cluster) and idle_pct (per job).",
+    "Shuffle, spill and skew come from Spark event logs; OOM, spill and lost-executor events come from driver logs; SQL query signals come from query history and cover SQL warehouse and serverless queries only.",
+    "'Retries' means extra task attempts (task retries or repairs). 'Runtime trend' and 'cost trend' compare the second half of the review period with the first half (runtime_change_pct, cost_change_pct, p95_cpu_change).",
+    "Round money to whole dollars. Mention owner and risk when recommending an action."
   ],
   "sample_questions": [
-    "How much did our prod jobs cost in the last 30 days, and how much can we save per month and per year?",
-    "What are the top 10 fixes to do first, with estimated monthly savings and effort?",
-    "Which quick wins (low effort) save the most money?",
-    "How much money did we waste on failed runs last month, and which jobs caused it?",
-    "Which jobs are oversized, and how much would right-sizing save?",
-    "Which jobs are running out of memory, and what should we change?",
-    "Show estimated savings by fix type.",
-    "Which jobs start more than one cluster per run?",
-    "Which jobs' cost grew the most in the last 30 days compared with the 30 days before?",
-    "Show the daily cost trend for the most expensive job over the last 90 days."
+    "Which jobs consumed the most DBUs during the review period?",
+    "Which clusters had the highest idle time?",
+    "Which jobs had the longest runtime trend?",
+    "Which jobs experienced the most failures or retries?",
+    "Which workloads have increasing cost but declining utilization?",
+    "What jobs generated the largest shuffle volume?",
+    "Which clusters are consistently oversized?",
+    "What optimization opportunities are suggested for the highest-cost jobs?",
+    "What is the top optimization opportunity in each workspace, with owner and estimated saving?",
+    "Which quick wins (low effort, low risk) save the most money?"
   ]
 }
