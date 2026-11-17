@@ -43,6 +43,20 @@ On a newer Watchtower commit, use `git apply --3way` and re-check the three edit
 Also confirm the S3 bucket behind the catalog's storage location has no lifecycle
 Expiration rule.
 
+## Storage tiering (keeps every file)
+
+With retention OFF the raw logs grow forever. `s3-lifecycle-transition.json` moves objects
+to S3 Standard-IA after 30 days and Glacier Instant Retrieval after 90 days. It has no
+Expiration, so nothing is deleted, and Glacier IR is still readable in milliseconds.
+
+1. Find the volume's S3 prefix: `DESCRIBE VOLUME watchtower.default.cluster_logs` (storage_location).
+2. Put that prefix in the rule's `Filter.Prefix`.
+3. `put-bucket-lifecycle-configuration` **replaces the bucket's whole lifecycle config**.
+   First read the current rules (`aws s3api get-bucket-lifecycle-configuration --bucket <b>`),
+   add this rule to that list, then apply the merged list.
+4. Standard-IA and Glacier IR bill a 30/90-day minimum and a per-GB retrieval fee; fine for
+   logs that are read rarely after ingestion.
+
 ## Notes
 
 - Watchtower reads **driver** logs only (`<log path>/*/driver/`), not executor logs or

@@ -1,0 +1,15 @@
+{
+  "Rules": [
+    {
+      "ID": "watchtower-cluster-logs-tiering",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "<storage-location-prefix-of-the-cluster_logs-volume>/"
+      },
+      "Transitions": [
+        { "Days": 30, "StorageClass": "STANDARD_IA" },
+        { "Days": 90, "StorageClass": "GLACIER_IR" }
+      ]
+    }
+  ]
+}

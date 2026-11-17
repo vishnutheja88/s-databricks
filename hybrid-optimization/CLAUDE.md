@@ -13,8 +13,8 @@ driver logs (`${catalog}.silver.logs`) say why. Packaged as a Databricks Asset B
 - No DROP / DELETE / TRUNCATE / INSERT OVERWRITE / MERGE...DELETE / VACUUM / RESTORE /
   CREATE OR REPLACE TABLE in `src/sql/`. `src/run_sql.py` enforces this and fails the
   task before running anything if a file contains one.
-- `ops.job_daily_history` is `delta.appendOnly`; the daily insert is idempotent
-  (`WHERE NOT EXISTS` on `snapshot_date`).
+- `ops.job_daily_history` and `ops.job_scorecard_daily` are `delta.appendOnly`; the daily
+  inserts are idempotent (`WHERE NOT EXISTS` on `snapshot_date`).
 - Watchtower must run with `watchtower/no-delete.patch` applied (retention OFF,
   `pipelines.reset.allowed=false`, Terraform `prevent_destroy`).
 - Never suggest `bundle destroy`, `terraform destroy` or a pipeline full refresh for prod.
@@ -29,6 +29,11 @@ driver logs (`${catalog}.silver.logs`) say why. Packaged as a Databricks Asset B
   `ALTER TABLE ... ADD COLUMNS` (never recreate the table).
 - Genie space: `src/genie/deploy_genie.py` (copied from workflow-observability), run by a human.
 - Dashboard JSON is generated: edit `tools/build_dashboard.py`, re-run it, commit both.
+- Dashboard, Genie and notebook read `ops.v_job_scorecard_latest` (daily snapshot), not the live
+  `v_job_scorecard_30d`. A new scorecard column needs: the view, `job_scorecard_daily`
+  (`ALTER TABLE ... ADD COLUMNS`), and the column list in `21_scorecard_snapshot.sql`.
+- Run `python3 tools/check.py` before committing (CI runs it on PRs; it never deploys).
+- Access is engineers only (logs can hold sensitive values); don't add business-user grants.
 - Savings rules live in the `scored` CTE of `v_job_scorecard_30d`; keep BUSINESS_GUIDE.md in sync.
 - `notebooks/optimization_insights.py` must stay read-only (only append to `ops.fix_plan_history`).
 

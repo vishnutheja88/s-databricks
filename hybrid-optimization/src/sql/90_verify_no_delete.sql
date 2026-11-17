@@ -5,6 +5,7 @@
 
 -- Expect delta.appendOnly = true
 SHOW TBLPROPERTIES watchtower.ops.job_daily_history;
+SHOW TBLPROPERTIES watchtower.ops.job_scorecard_daily;
 
 -- Expect pipelines.reset.allowed = false (after applying watchtower/no-delete.patch)
 SHOW TBLPROPERTIES watchtower.bronze.logs;

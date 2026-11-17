@@ -11,7 +11,7 @@
         "  ROUND(SUM(failed_run_cost_usd), 0)                            AS failed_run_spend_30d,\n",
         "  COUNT_IF(category <> 'OK')                                    AS jobs_needing_action,\n",
         "  COUNT(*)                                                      AS jobs_total\n",
-        "FROM ops.v_job_scorecard_30d"
+        "FROM ops.v_job_scorecard_latest"
       ]
     },
     {
@@ -23,7 +23,7 @@
         "       runs, failed_runs, failed_run_cost_usd, avg_minutes, clusters_per_run,\n",
         "       avg_cpu, p95_cpu, avg_mem, max_swap,\n",
         "       oom_events, spill_events, lost_executor_events, error_lines, photon\n",
-        "FROM ops.v_job_scorecard_30d"
+        "FROM ops.v_job_scorecard_latest"
       ]
     },
     {
@@ -32,7 +32,7 @@
       "queryLines": [
         "SELECT c.usage_date, COALESCE(s.job_name, c.job_id) AS job_name, s.category, c.list_cost_usd\n",
         "FROM ops.v_job_cost_daily c\n",
-        "LEFT JOIN ops.v_job_scorecard_30d s USING (job_id)\n",
+        "LEFT JOIN ops.v_job_scorecard_latest s USING (job_id)\n",
         "WHERE c.usage_date >= current_date() - INTERVAL 90 DAYS"
       ]
     },
@@ -42,7 +42,7 @@
       "queryLines": [
         "SELECT h.run_date, COALESCE(s.job_name, h.job_id) AS job_name, h.runs, h.failed_runs, h.avg_minutes\n",
         "FROM ops.v_job_run_health_daily h\n",
-        "LEFT JOIN ops.v_job_scorecard_30d s USING (job_id)\n",
+        "LEFT JOIN ops.v_job_scorecard_latest s USING (job_id)\n",
         "WHERE h.run_date >= current_date() - INTERVAL 90 DAYS"
       ]
     },
@@ -53,7 +53,7 @@
         "SELECT g.log_date, COALESCE(s.job_name, g.job_id) AS job_name,\n",
         "       g.oom_events, g.spill_events, g.lost_executor_events, g.error_lines\n",
         "FROM ops.v_job_log_signals_daily g\n",
-        "LEFT JOIN ops.v_job_scorecard_30d s USING (job_id)\n",
+        "LEFT JOIN ops.v_job_scorecard_latest s USING (job_id)\n",
         "WHERE g.log_date >= current_date() - INTERVAL 30 DAYS"
       ]
     }

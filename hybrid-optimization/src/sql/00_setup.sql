@@ -28,3 +28,36 @@ CREATE TABLE IF NOT EXISTS ${catalog}.ops.job_daily_history (
 )
 COMMENT 'Append-only daily snapshot per job (no-delete policy)'
 TBLPROPERTIES ('delta.appendOnly' = 'true');
+
+-- Daily saved copy of v_job_scorecard_30d. Dashboards and Genie read the latest
+-- snapshot (ops.v_job_scorecard_latest) instead of recomputing from system tables.
+CREATE TABLE IF NOT EXISTS ${catalog}.ops.job_scorecard_daily (
+  snapshot_date           DATE    COMMENT 'Day the 30-day scorecard was computed',
+  job_id                  STRING,
+  job_name                STRING,
+  cost_30d_usd            DOUBLE  COMMENT 'List price',
+  dbus_30d                DOUBLE,
+  photon                  BOOLEAN,
+  runs                    BIGINT,
+  failed_runs             BIGINT,
+  failed_run_cost_usd     DOUBLE,
+  avg_minutes             DOUBLE,
+  clusters_per_run        DOUBLE,
+  avg_cpu                 DOUBLE,
+  p95_cpu                 DOUBLE,
+  avg_mem                 DOUBLE,
+  max_swap                DOUBLE,
+  oom_events              BIGINT,
+  spill_events            BIGINT,
+  lost_executor_events    BIGINT,
+  error_lines             BIGINT,
+  category                STRING  COMMENT 'Fix type',
+  top_recommendation      STRING,
+  est_monthly_savings_usd DOUBLE  COMMENT 'Estimate, list price',
+  fix_effort              STRING,
+  est_annual_savings_usd  DOUBLE,
+  priority_rank           INT     COMMENT '1 = fix first; NULL when category = OK',
+  inserted_at             TIMESTAMP
+)
+COMMENT 'Append-only daily snapshot of the job scorecard (no-delete policy)'
+TBLPROPERTIES ('delta.appendOnly' = 'true');

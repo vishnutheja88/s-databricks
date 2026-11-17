@@ -6,18 +6,5 @@
   "cluster_log_conf.path": {
     "type": "fixed",
     "value": "/Volumes/watchtower/default/cluster_logs/cluster-logs"
-  },
-  "init_scripts.0.volumes.destination": {
-    "type": "fixed",
-    "value": "/Volumes/watchtower/default/init_scripts/configure_log4j.sh"
-  },
-  "aws_attributes.first_on_demand": {
-    "type": "range",
-    "minValue": 1,
-    "defaultValue": 1
-  },
-  "aws_attributes.availability": {
-    "type": "unlimited",
-    "defaultValue": "SPOT_WITH_FALLBACK"
   }
 }

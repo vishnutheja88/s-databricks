@@ -31,6 +31,12 @@ if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", CATALOG):
 TOP_N = max(1, int(dbutils.widgets.get("top_n") or 10))
 OPS = f"{CATALOG}.ops"
 
+# Read the saved daily scorecard (fast). Before the first daily snapshot exists, fall back to the live view.
+SCORECARD = f"{OPS}.v_job_scorecard_latest"
+if spark.sql(f"SELECT COUNT(*) AS n FROM {SCORECARD}").first().n == 0:
+    SCORECARD = f"{OPS}.v_job_scorecard_30d"
+print(f"Scorecard source: {SCORECARD}")
+
 # COMMAND ----------
 
 # MAGIC %md ## 1. Executive summary
@@ -44,7 +50,7 @@ SELECT ROUND(SUM(cost_30d_usd))            AS job_spend_30d_usd,
        ROUND(SUM(failed_run_cost_usd))     AS failed_run_spend_30d_usd,
        COUNT_IF(category <> 'OK')          AS jobs_needing_action,
        COUNT(*)                            AS jobs_analyzed
-FROM {OPS}.v_job_scorecard_30d
+FROM {SCORECARD}
 """).first()
 
 spend = kpi.job_spend_30d_usd or 0
@@ -62,7 +68,7 @@ SELECT category AS fix_type, fix_effort,
        COUNT(*) AS jobs,
        ROUND(SUM(cost_30d_usd)) AS spend_30d_usd,
        ROUND(SUM(est_monthly_savings_usd)) AS est_monthly_savings_usd
-FROM {OPS}.v_job_scorecard_30d
+FROM {SCORECARD}
 WHERE category <> 'OK'
 GROUP BY ALL
 ORDER BY est_monthly_savings_usd DESC
@@ -79,7 +85,7 @@ SELECT priority_rank, job_name, job_id, category, top_recommendation, fix_effort
        est_monthly_savings_usd, cost_30d_usd, failed_runs, failed_run_cost_usd,
        avg_cpu, p95_cpu, avg_mem, max_swap, clusters_per_run,
        oom_events, spill_events, lost_executor_events
-FROM {OPS}.v_job_scorecard_30d
+FROM {SCORECARD}
 WHERE category <> 'OK'
 ORDER BY priority_rank
 LIMIT {TOP_N}

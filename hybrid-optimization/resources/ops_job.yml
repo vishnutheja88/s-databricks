@@ -58,4 +58,4 @@ resources:
               - "--catalog={{job.parameters.catalog}}"
               - "--workspace_id={{job.parameters.workspace_id}}"
               - "--snapshot_date={{job.parameters.snapshot_date}}"
-              - "--files=20_daily_snapshot.sql"
+              - "--files=20_daily_snapshot.sql,21_scorecard_snapshot.sql"

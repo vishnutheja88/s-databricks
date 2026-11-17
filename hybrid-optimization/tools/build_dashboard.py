@@ -23,29 +23,29 @@ SELECT
   ROUND(SUM(failed_run_cost_usd), 0)                            AS failed_run_spend_30d,
   COUNT_IF(category <> 'OK')                                    AS jobs_needing_action,
   COUNT(*)                                                      AS jobs_total
-FROM ops.v_job_scorecard_30d"""),
+FROM ops.v_job_scorecard_latest"""),
     "ds_scorecard": ("Job scorecard (30 days)", """
 SELECT priority_rank, job_name, job_id, category, top_recommendation, fix_effort,
        cost_30d_usd, est_monthly_savings_usd, est_annual_savings_usd,
        runs, failed_runs, failed_run_cost_usd, avg_minutes, clusters_per_run,
        avg_cpu, p95_cpu, avg_mem, max_swap,
        oom_events, spill_events, lost_executor_events, error_lines, photon
-FROM ops.v_job_scorecard_30d"""),
+FROM ops.v_job_scorecard_latest"""),
     "ds_cost_trend": ("Daily job spend (90 days)", """
 SELECT c.usage_date, COALESCE(s.job_name, c.job_id) AS job_name, s.category, c.list_cost_usd
 FROM ops.v_job_cost_daily c
-LEFT JOIN ops.v_job_scorecard_30d s USING (job_id)
+LEFT JOIN ops.v_job_scorecard_latest s USING (job_id)
 WHERE c.usage_date >= current_date() - INTERVAL 90 DAYS"""),
     "ds_runtime_trend": ("Daily runs and runtime (90 days)", """
 SELECT h.run_date, COALESCE(s.job_name, h.job_id) AS job_name, h.runs, h.failed_runs, h.avg_minutes
 FROM ops.v_job_run_health_daily h
-LEFT JOIN ops.v_job_scorecard_30d s USING (job_id)
+LEFT JOIN ops.v_job_scorecard_latest s USING (job_id)
 WHERE h.run_date >= current_date() - INTERVAL 90 DAYS"""),
     "ds_signals_trend": ("Daily log signals (30 days)", """
 SELECT g.log_date, COALESCE(s.job_name, g.job_id) AS job_name,
        g.oom_events, g.spill_events, g.lost_executor_events, g.error_lines
 FROM ops.v_job_log_signals_daily g
-LEFT JOIN ops.v_job_scorecard_30d s USING (job_id)
+LEFT JOIN ops.v_job_scorecard_latest s USING (job_id)
 WHERE g.log_date >= current_date() - INTERVAL 30 DAYS"""),
 }
 

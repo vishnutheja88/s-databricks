@@ -1,5 +1,9 @@
 # Job Optimization: business guide
 
+**Access:** engineers only. The dashboard, Genie space and log tables are shared with the
+engineering group, because raw log lines can contain sensitive values. Engineers share
+findings and savings with business owners.
+
 **What it answers:** how much prod Databricks jobs cost, how much we can save, which
 jobs to fix first, what to change, and whether the fix worked.
 

@@ -3,7 +3,7 @@
   "description": "Ask which prod jobs waste capacity or money, and why, using system tables plus Watchtower driver logs.",
   "tables": [
     {
-      "identifier": "${catalog}.ops.v_job_scorecard_30d",
+      "identifier": "${catalog}.ops.v_job_scorecard_latest",
       "description": "One row per prod job over the last 30 days: list cost, DBUs, runs, failed runs, spend on failed runs, avg minutes, clusters per run, worker CPU/memory/swap, OOM/spill/lost-executor/error counts from logs, category (fix type), top_recommendation, fix_effort, est_monthly_savings_usd, est_annual_savings_usd and priority_rank (1 = do first).",
       "example_value_columns": [
         "job_name",
@@ -21,7 +21,7 @@
     },
     {
       "identifier": "${catalog}.ops.v_job_cost_daily",
-      "description": "Daily DBUs and list cost (USD) per job_id. Join to v_job_scorecard_30d on job_id for job_name. Use for cost growth and trend questions.",
+      "description": "Daily DBUs and list cost (USD) per job_id. Join to v_job_scorecard_latest on job_id for job_name. Use for cost growth and trend questions.",
       "example_value_columns": []
     },
     {
@@ -57,7 +57,7 @@
     "oom_events, spill_events and lost_executor_events come from driver logs parsed by Watchtower.",
     "Show job_name, not job_id. Round money to whole dollars. 'Last month' means the last 30 days.",
     "For trends over time, or comparing before and after a change, use job_daily_history.",
-    "To show log lines for a job, join silver.logs to ops.v_job_cluster_map on cluster_id, filter by the job's job_id from v_job_scorecard_30d."
+    "To show log lines for a job, join silver.logs to ops.v_job_cluster_map on cluster_id, filter by the job's job_id from v_job_scorecard_latest."
   ],
   "sample_questions": [
     "How much did our prod jobs cost in the last 30 days, and how much can we save per month and per year?",

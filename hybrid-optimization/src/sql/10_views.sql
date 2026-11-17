@@ -60,7 +60,7 @@ SELECT m.job_id,
   COALESCE(DATE(l.log_ts), DATE(l.file_modification_time)) AS log_date,
   COUNT_IF(l.log_msg RLIKE '(?i)OutOfMemoryError|GC overhead limit|exit code 137|Container killed.*memory') AS oom_events,
   COUNT_IF(l.log_msg RLIKE '(?i)spill(ing|ed)? .*to disk') AS spill_events,
-  COUNT_IF(l.log_msg RLIKE '(?i)Lost executor|ExecutorLostFailure|decommission') AS lost_executor_events,
+  COUNT_IF(l.log_msg RLIKE '(?i)Lost executor|ExecutorLostFailure') AS lost_executor_events,
   COUNT_IF(l.log_level IN ('ERROR', 'FATAL', 'CRITICAL')) AS error_lines,
   COUNT(DISTINCT m.job_run_id) AS runs_with_logs
 FROM ${catalog}.silver.logs l
@@ -246,3 +246,12 @@ SELECT scored.*,
                                         est_monthly_savings_usd DESC, cost_30d_usd DESC)
   END AS priority_rank
 FROM scored;
+
+-- 7. Latest saved scorecard: what the dashboard, Genie and the notebook read.
+--    Filled daily by 21_scorecard_snapshot.sql, so dashboards don't rescan system tables.
+CREATE OR REPLACE VIEW ${catalog}.ops.v_job_scorecard_latest
+COMMENT 'Most recent daily snapshot of v_job_scorecard_30d'
+AS
+SELECT *
+FROM ${catalog}.ops.job_scorecard_daily
+WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM ${catalog}.ops.job_scorecard_daily);

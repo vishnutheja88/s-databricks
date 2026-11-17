@@ -1,0 +1,24 @@
+name: validate-hybrid-optimization
+
+# Offline checks only. This workflow never deploys and needs no secrets.
+on:
+  pull_request:
+    paths: ['hybrid-optimization/**', '.github/workflows/hybrid-optimization-validate.yml']
+  push:
+    branches: [main]
+    paths: ['hybrid-optimization/**', '.github/workflows/hybrid-optimization-validate.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pyyaml sqlglot
+      - run: python hybrid-optimization/tools/check.py
