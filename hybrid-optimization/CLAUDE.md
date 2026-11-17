@@ -28,6 +28,9 @@ driver logs (`${catalog}.silver.logs`) say why. Packaged as a Databricks Asset B
   add a `WHEN` branch in priority order, and a column to `job_daily_history` via
   `ALTER TABLE ... ADD COLUMNS` (never recreate the table).
 - Genie space: `src/genie/deploy_genie.py` (copied from workflow-observability), run by a human.
+- Dashboard JSON is generated: edit `tools/build_dashboard.py`, re-run it, commit both.
+- Savings rules live in the `scored` CTE of `v_job_scorecard_30d`; keep BUSINESS_GUIDE.md in sync.
+- `notebooks/optimization_insights.py` must stay read-only (only append to `ops.fix_plan_history`).
 
 ## Not yet verified live
 

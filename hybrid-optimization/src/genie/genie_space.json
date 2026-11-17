@@ -4,13 +4,25 @@
   "tables": [
     {
       "identifier": "${catalog}.ops.v_job_scorecard_30d",
-      "description": "One row per prod job over the last 30 days: list cost, DBUs, runs, failed runs, avg minutes, clusters per run, worker CPU/memory/swap, OOM/spill/lost-executor/error counts from logs, and one prioritized top_recommendation.",
-      "example_value_columns": ["job_name", "top_recommendation"]
+      "description": "One row per prod job over the last 30 days: list cost, DBUs, runs, failed runs, spend on failed runs, avg minutes, clusters per run, worker CPU/memory/swap, OOM/spill/lost-executor/error counts from logs, category (fix type), top_recommendation, fix_effort, est_monthly_savings_usd, est_annual_savings_usd and priority_rank (1 = do first).",
+      "example_value_columns": [
+        "job_name",
+        "category",
+        "top_recommendation",
+        "fix_effort"
+      ]
     },
     {
       "identifier": "${catalog}.ops.job_daily_history",
       "description": "Append-only daily snapshot per job (snapshot_date): cost, utilization, log signals and run health. Use for trends and before/after comparisons of a change.",
-      "example_value_columns": ["job_name"]
+      "example_value_columns": [
+        "job_name"
+      ]
+    },
+    {
+      "identifier": "${catalog}.ops.v_job_cost_daily",
+      "description": "Daily DBUs and list cost (USD) per job_id. Join to v_job_scorecard_30d on job_id for job_name. Use for cost growth and trend questions.",
+      "example_value_columns": []
     },
     {
       "identifier": "${catalog}.ops.v_job_log_signals_daily",
@@ -25,7 +37,10 @@
     {
       "identifier": "${catalog}.silver.logs",
       "description": "Parsed driver log lines from Watchtower: cluster_id, log_source (stdout/stderr/log4j), log_level, log_ts, log_msg. Join to ops.v_job_cluster_map on cluster_id to get job_id and job_run_id.",
-      "example_value_columns": ["log_source", "log_level"]
+      "example_value_columns": [
+        "log_source",
+        "log_level"
+      ]
     },
     {
       "identifier": "${catalog}.ops.v_job_cluster_map",
@@ -34,19 +49,26 @@
     }
   ],
   "instructions": [
-    "All data is from the prod workspace. Costs are list price in USD, not the negotiated rate.",
-    "CPU and memory are worker-node percentages. p95_cpu below 40 with avg_mem below 50 means oversized.",
+    "All data is from the prod workspace. Costs are list price in USD, not the negotiated rate; say so when you report money.",
+    "est_monthly_savings_usd and est_annual_savings_usd are conservative estimates, not guaranteed savings. Call them 'estimated'.",
+    "category is the fix type: MEMORY, SPILL, LOST_EXECUTORS, FAILING, MULTI_CLUSTER, OVERSIZED, CPU_BOUND or OK. Use top_recommendation to explain it in plain words.",
+    "priority_rank orders the work: 1 is the job to fix first. Jobs with category OK have no rank.",
+    "CPU and memory are worker-node percentages. p95_cpu below 40 with avg_mem below 50 means the cluster is oversized.",
     "oom_events, spill_events and lost_executor_events come from driver logs parsed by Watchtower.",
-    "Show job_name, not job_id, in answers. 'Last month' means the last 30 days.",
+    "Show job_name, not job_id. Round money to whole dollars. 'Last month' means the last 30 days.",
     "For trends over time, or comparing before and after a change, use job_daily_history.",
-    "To show log lines for a job, join silver.logs to ops.v_job_cluster_map on cluster_id and filter by job name via v_job_scorecard_30d."
+    "To show log lines for a job, join silver.logs to ops.v_job_cluster_map on cluster_id, filter by the job's job_id from v_job_scorecard_30d."
   ],
   "sample_questions": [
-    "Which 10 jobs cost the most in the last 30 days, and what is the top recommendation for each?",
-    "Which jobs had out-of-memory events last week?",
-    "List oversized jobs ordered by cost.",
+    "How much did our prod jobs cost in the last 30 days, and how much can we save per month and per year?",
+    "What are the top 10 fixes to do first, with estimated monthly savings and effort?",
+    "Which quick wins (low effort) save the most money?",
+    "How much money did we waste on failed runs last month, and which jobs caused it?",
+    "Which jobs are oversized, and how much would right-sizing save?",
+    "Which jobs are running out of memory, and what should we change?",
+    "Show estimated savings by fix type.",
     "Which jobs start more than one cluster per run?",
-    "Show daily cost and average runtime for the most expensive job over the last 90 days.",
-    "Show the last 50 ERROR log lines for the most expensive failing job."
+    "Which jobs' cost grew the most in the last 30 days compared with the 30 days before?",
+    "Show the daily cost trend for the most expensive job over the last 90 days."
   ]
 }

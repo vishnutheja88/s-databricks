@@ -1,0 +1,1338 @@
+{
+  "datasets": [
+    {
+      "name": "ds_kpi",
+      "displayName": "Executive KPIs (30 days)",
+      "queryLines": [
+        "SELECT\n",
+        "  ROUND(SUM(cost_30d_usd), 0)                                   AS job_spend_30d,\n",
+        "  ROUND(SUM(est_monthly_savings_usd), 0)                        AS est_monthly_savings,\n",
+        "  ROUND(SUM(est_annual_savings_usd), 0)                         AS est_annual_savings,\n",
+        "  ROUND(SUM(failed_run_cost_usd), 0)                            AS failed_run_spend_30d,\n",
+        "  COUNT_IF(category <> 'OK')                                    AS jobs_needing_action,\n",
+        "  COUNT(*)                                                      AS jobs_total\n",
+        "FROM ops.v_job_scorecard_30d"
+      ]
+    },
+    {
+      "name": "ds_scorecard",
+      "displayName": "Job scorecard (30 days)",
+      "queryLines": [
+        "SELECT priority_rank, job_name, job_id, category, top_recommendation, fix_effort,\n",
+        "       cost_30d_usd, est_monthly_savings_usd, est_annual_savings_usd,\n",
+        "       runs, failed_runs, failed_run_cost_usd, avg_minutes, clusters_per_run,\n",
+        "       avg_cpu, p95_cpu, avg_mem, max_swap,\n",
+        "       oom_events, spill_events, lost_executor_events, error_lines, photon\n",
+        "FROM ops.v_job_scorecard_30d"
+      ]
+    },
+    {
+      "name": "ds_cost_trend",
+      "displayName": "Daily job spend (90 days)",
+      "queryLines": [
+        "SELECT c.usage_date, COALESCE(s.job_name, c.job_id) AS job_name, s.category, c.list_cost_usd\n",
+        "FROM ops.v_job_cost_daily c\n",
+        "LEFT JOIN ops.v_job_scorecard_30d s USING (job_id)\n",
+        "WHERE c.usage_date >= current_date() - INTERVAL 90 DAYS"
+      ]
+    },
+    {
+      "name": "ds_runtime_trend",
+      "displayName": "Daily runs and runtime (90 days)",
+      "queryLines": [
+        "SELECT h.run_date, COALESCE(s.job_name, h.job_id) AS job_name, h.runs, h.failed_runs, h.avg_minutes\n",
+        "FROM ops.v_job_run_health_daily h\n",
+        "LEFT JOIN ops.v_job_scorecard_30d s USING (job_id)\n",
+        "WHERE h.run_date >= current_date() - INTERVAL 90 DAYS"
+      ]
+    },
+    {
+      "name": "ds_signals_trend",
+      "displayName": "Daily log signals (30 days)",
+      "queryLines": [
+        "SELECT g.log_date, COALESCE(s.job_name, g.job_id) AS job_name,\n",
+        "       g.oom_events, g.spill_events, g.lost_executor_events, g.error_lines\n",
+        "FROM ops.v_job_log_signals_daily g\n",
+        "LEFT JOIN ops.v_job_scorecard_30d s USING (job_id)\n",
+        "WHERE g.log_date >= current_date() - INTERVAL 30 DAYS"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "executive",
+      "displayName": "Executive summary",
+      "layout": [
+        {
+          "widget": {
+            "name": "kpi_spend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "job_spend_30d",
+                      "expression": "`job_spend_30d`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "job_spend_30d",
+                  "displayName": "Job spend (30d, list)",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Job spend (30d, list)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_save_m",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "est_monthly_savings",
+                      "expression": "`est_monthly_savings`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "est_monthly_savings",
+                  "displayName": "Est. savings / month",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Est. savings / month"
+              }
+            }
+          },
+          "position": {
+            "x": 1,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_save_y",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "est_annual_savings",
+                      "expression": "`est_annual_savings`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "est_annual_savings",
+                  "displayName": "Est. savings / year",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Est. savings / year"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_failed",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "failed_run_spend_30d",
+                      "expression": "`failed_run_spend_30d`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "failed_run_spend_30d",
+                  "displayName": "Spend on failed runs (30d)",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Spend on failed runs (30d)"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_action",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "jobs_needing_action",
+                      "expression": "`jobs_needing_action`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "jobs_needing_action",
+                  "displayName": "Jobs needing action"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Jobs needing action"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_total",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "jobs_total",
+                      "expression": "`jobs_total`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "jobs_total",
+                  "displayName": "Jobs analyzed"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Jobs analyzed"
+              }
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 0,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "save_by_cat",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "category",
+                      "expression": "`category`"
+                    },
+                    {
+                      "name": "savings",
+                      "expression": "SUM(`est_monthly_savings_usd`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "category",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "category"
+                },
+                "y": {
+                  "fieldName": "savings",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "savings"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Est. monthly savings by fix type"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "cost_top_jobs",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "cost",
+                      "expression": "SUM(`cost_30d_usd`)"
+                    },
+                    {
+                      "name": "category",
+                      "expression": "`category`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "job_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "job_name"
+                },
+                "y": {
+                  "fieldName": "cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "cost"
+                },
+                "color": {
+                  "fieldName": "category",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "category"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Top jobs by 30-day spend (color = fix type)"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "top_actions",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "priority_rank",
+                      "expression": "`priority_rank`"
+                    },
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "top_recommendation",
+                      "expression": "`top_recommendation`"
+                    },
+                    {
+                      "name": "fix_effort",
+                      "expression": "`fix_effort`"
+                    },
+                    {
+                      "name": "est_monthly_savings_usd",
+                      "expression": "`est_monthly_savings_usd`"
+                    },
+                    {
+                      "name": "est_annual_savings_usd",
+                      "expression": "`est_annual_savings_usd`"
+                    },
+                    {
+                      "name": "cost_30d_usd",
+                      "expression": "`cost_30d_usd`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "priority_rank",
+                    "displayName": "priority_rank"
+                  },
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "job_name"
+                  },
+                  {
+                    "fieldName": "top_recommendation",
+                    "displayName": "top_recommendation"
+                  },
+                  {
+                    "fieldName": "fix_effort",
+                    "displayName": "fix_effort"
+                  },
+                  {
+                    "fieldName": "est_monthly_savings_usd",
+                    "displayName": "est_monthly_savings_usd"
+                  },
+                  {
+                    "fieldName": "est_annual_savings_usd",
+                    "displayName": "est_annual_savings_usd"
+                  },
+                  {
+                    "fieldName": "cost_30d_usd",
+                    "displayName": "cost_30d_usd"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Prioritized action list (rank 1 = do first)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 6,
+            "height": 8
+          }
+        }
+      ]
+    },
+    {
+      "name": "utilization",
+      "displayName": "Cluster utilization",
+      "layout": [
+        {
+          "widget": {
+            "name": "flt_cat_util",
+            "queries": [
+              {
+                "name": "f_ds_scorecard_category",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "category",
+                      "expression": "`category`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "category",
+                    "displayName": "Fix type",
+                    "queryName": "f_ds_scorecard_category"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Fix type"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p95_by_job",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "p95_cpu",
+                      "expression": "AVG(`p95_cpu`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "job_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "job_name"
+                },
+                "y": {
+                  "fieldName": "p95_cpu",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "p95_cpu"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "p95 worker CPU % by job (below 40 = oversized)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "mem_by_job",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "avg_mem",
+                      "expression": "AVG(`avg_mem`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "job_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "job_name"
+                },
+                "y": {
+                  "fieldName": "avg_mem",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "avg_mem"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Avg worker memory % by job"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 1,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "util_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "category",
+                      "expression": "`category`"
+                    },
+                    {
+                      "name": "cost_30d_usd",
+                      "expression": "`cost_30d_usd`"
+                    },
+                    {
+                      "name": "avg_cpu",
+                      "expression": "`avg_cpu`"
+                    },
+                    {
+                      "name": "p95_cpu",
+                      "expression": "`p95_cpu`"
+                    },
+                    {
+                      "name": "avg_mem",
+                      "expression": "`avg_mem`"
+                    },
+                    {
+                      "name": "max_swap",
+                      "expression": "`max_swap`"
+                    },
+                    {
+                      "name": "clusters_per_run",
+                      "expression": "`clusters_per_run`"
+                    },
+                    {
+                      "name": "photon",
+                      "expression": "`photon`"
+                    },
+                    {
+                      "name": "est_monthly_savings_usd",
+                      "expression": "`est_monthly_savings_usd`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "job_name"
+                  },
+                  {
+                    "fieldName": "category",
+                    "displayName": "category"
+                  },
+                  {
+                    "fieldName": "cost_30d_usd",
+                    "displayName": "cost_30d_usd"
+                  },
+                  {
+                    "fieldName": "avg_cpu",
+                    "displayName": "avg_cpu"
+                  },
+                  {
+                    "fieldName": "p95_cpu",
+                    "displayName": "p95_cpu"
+                  },
+                  {
+                    "fieldName": "avg_mem",
+                    "displayName": "avg_mem"
+                  },
+                  {
+                    "fieldName": "max_swap",
+                    "displayName": "max_swap"
+                  },
+                  {
+                    "fieldName": "clusters_per_run",
+                    "displayName": "clusters_per_run"
+                  },
+                  {
+                    "fieldName": "photon",
+                    "displayName": "photon"
+                  },
+                  {
+                    "fieldName": "est_monthly_savings_usd",
+                    "displayName": "est_monthly_savings_usd"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Utilization detail"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 7,
+            "width": 6,
+            "height": 8
+          }
+        }
+      ]
+    },
+    {
+      "name": "reliability",
+      "displayName": "Reliability & root cause",
+      "layout": [
+        {
+          "widget": {
+            "name": "failed_cost_by_job",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "failed_cost",
+                      "expression": "SUM(`failed_run_cost_usd`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "job_name",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "job_name"
+                },
+                "y": {
+                  "fieldName": "failed_cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "failed_cost"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Spend on failed runs by job (30d)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "oom_trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_signals_trend",
+                  "fields": [
+                    {
+                      "name": "day",
+                      "expression": "DATE_TRUNC(\"DAY\", `log_date`)"
+                    },
+                    {
+                      "name": "oom",
+                      "expression": "SUM(`oom_events`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "day",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "date"
+                },
+                "y": {
+                  "fieldName": "oom",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "oom"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Out-of-memory events per day"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 0,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "rc_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_scorecard",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "category",
+                      "expression": "`category`"
+                    },
+                    {
+                      "name": "failed_runs",
+                      "expression": "`failed_runs`"
+                    },
+                    {
+                      "name": "failed_run_cost_usd",
+                      "expression": "`failed_run_cost_usd`"
+                    },
+                    {
+                      "name": "oom_events",
+                      "expression": "`oom_events`"
+                    },
+                    {
+                      "name": "spill_events",
+                      "expression": "`spill_events`"
+                    },
+                    {
+                      "name": "lost_executor_events",
+                      "expression": "`lost_executor_events`"
+                    },
+                    {
+                      "name": "error_lines",
+                      "expression": "`error_lines`"
+                    },
+                    {
+                      "name": "max_swap",
+                      "expression": "`max_swap`"
+                    },
+                    {
+                      "name": "top_recommendation",
+                      "expression": "`top_recommendation`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "job_name"
+                  },
+                  {
+                    "fieldName": "category",
+                    "displayName": "category"
+                  },
+                  {
+                    "fieldName": "failed_runs",
+                    "displayName": "failed_runs"
+                  },
+                  {
+                    "fieldName": "failed_run_cost_usd",
+                    "displayName": "failed_run_cost_usd"
+                  },
+                  {
+                    "fieldName": "oom_events",
+                    "displayName": "oom_events"
+                  },
+                  {
+                    "fieldName": "spill_events",
+                    "displayName": "spill_events"
+                  },
+                  {
+                    "fieldName": "lost_executor_events",
+                    "displayName": "lost_executor_events"
+                  },
+                  {
+                    "fieldName": "error_lines",
+                    "displayName": "error_lines"
+                  },
+                  {
+                    "fieldName": "max_swap",
+                    "displayName": "max_swap"
+                  },
+                  {
+                    "fieldName": "top_recommendation",
+                    "displayName": "top_recommendation"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Jobs with failures or log signals (open Watchtower Logs Dashboard for the lines)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 6,
+            "height": 8
+          }
+        }
+      ]
+    },
+    {
+      "name": "trends",
+      "displayName": "Trends",
+      "layout": [
+        {
+          "widget": {
+            "name": "flt_job_cost",
+            "queries": [
+              {
+                "name": "f_ds_cost_trend_job_name",
+                "query": {
+                  "datasetName": "ds_cost_trend",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "Job",
+                    "queryName": "f_ds_cost_trend_job_name"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Job"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 3,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "flt_job_rt",
+            "queries": [
+              {
+                "name": "f_ds_runtime_trend_job_name",
+                "query": {
+                  "datasetName": "ds_runtime_trend",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "Job",
+                    "queryName": "f_ds_runtime_trend_job_name"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Job"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 0,
+            "width": 3,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "cost_trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cost_trend",
+                  "fields": [
+                    {
+                      "name": "day",
+                      "expression": "DATE_TRUNC(\"DAY\", `usage_date`)"
+                    },
+                    {
+                      "name": "cost",
+                      "expression": "SUM(`list_cost_usd`)"
+                    },
+                    {
+                      "name": "category",
+                      "expression": "`category`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "day",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "date"
+                },
+                "y": {
+                  "fieldName": "cost",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "cost"
+                },
+                "color": {
+                  "fieldName": "category",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "category"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Daily job spend by fix type (90d)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "runtime_trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_runtime_trend",
+                  "fields": [
+                    {
+                      "name": "day",
+                      "expression": "DATE_TRUNC(\"DAY\", `run_date`)"
+                    },
+                    {
+                      "name": "avg_minutes",
+                      "expression": "AVG(`avg_minutes`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "day",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "date"
+                },
+                "y": {
+                  "fieldName": "avg_minutes",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "avg_minutes"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Average run minutes (90d)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 7,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "fail_trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_runtime_trend",
+                  "fields": [
+                    {
+                      "name": "day",
+                      "expression": "DATE_TRUNC(\"DAY\", `run_date`)"
+                    },
+                    {
+                      "name": "failed_runs",
+                      "expression": "SUM(`failed_runs`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "day",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "date"
+                },
+                "y": {
+                  "fieldName": "failed_runs",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "failed_runs"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Failed runs per day (90d)"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 7,
+            "width": 3,
+            "height": 6
+          }
+        }
+      ]
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "LEFT"
+    }
+  }
+}

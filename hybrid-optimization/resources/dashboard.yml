@@ -1,0 +1,11 @@
+# AI/BI dashboard. Queries in the .lvdash.json use schema.table (ops.*);
+# dataset_catalog points them at this target's catalog.
+# Regenerate the JSON with: python3 tools/build_dashboard.py
+resources:
+  dashboards:
+    job_optimization:
+      display_name: "Job Optimization (${bundle.target})"
+      file_path: ../src/dashboards/job_optimization.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      dataset_catalog: ${var.catalog}
+      embed_credentials: false        # viewers query with their own permissions (SELECT on watchtower.ops)
