@@ -1,0 +1,84 @@
+diff --git a/databricks.yml b/databricks.yml
+index 7264439..24dc11f 100644
+--- a/databricks.yml
++++ b/databricks.yml
+@@ -36,7 +36,7 @@ variables:
+     default: i3.xlarge
+     description: Node type for the demo job cluster (cloud-specific)
+   raw_log_retention_action:
+-    default: DELETE
++    default: "OFF"   # no-delete policy; quoted so YAML keeps the string
+     description: Action to take on raw log files after autoloader has ingested them (DELETE, MOVE, or OFF)
+   raw_log_retention_duration:
+     default: 30 days
+diff --git a/src/watchtower/log_ingest_pipeline.py b/src/watchtower/log_ingest_pipeline.py
+index 3d6aaae..abf3a30 100644
+--- a/src/watchtower/log_ingest_pipeline.py
++++ b/src/watchtower/log_ingest_pipeline.py
+@@ -47,6 +47,8 @@ REGEX_SUBJECTIVE_LOG_TS = r"(\d{2}[/\-]\d{2}[/\-]\d{2}\s\d{2}:\d{2}:\d{2})"
+     comment="Raw spark driver logs from job compute clusters.",
+     table_properties={
+         "Quality": "bronze",
++        # Block full refresh: it would truncate this table.
++        "pipelines.reset.allowed": "false",
+     },
+     cluster_by=["file_modification_time"],
+ )
+@@ -58,10 +60,20 @@ def bronze_logs():  # type: ignore[no-untyped-def]
+     if not raw_log_location:
+         raise ValueError("raw_log_location must be set")
+ 
+-    # Autoloader retention configuration
++    # Autoloader retention configuration.
++    # NO-DELETE HARDENING: default is OFF and DELETE is refused. An unquoted
++    # YAML `OFF` arrives as "false", so that is treated as OFF too.
+     clean_source_action: str = (
+-        spark.conf.get("watchtower.autoloader.cleanSource") or "DELETE"
++        (spark.conf.get("watchtower.autoloader.cleanSource") or "OFF").strip().upper()
+     )
++    if clean_source_action in ("FALSE", "NONE", ""):
++        clean_source_action = "OFF"
++    if clean_source_action == "DELETE":
++        raise ValueError(
++            "watchtower.autoloader.cleanSource=DELETE is disabled by policy; use OFF or MOVE"
++        )
++    if clean_source_action not in ("OFF", "MOVE"):
++        raise ValueError(f"unsupported cleanSource action: {clean_source_action}")
+     retention_duration: str = (
+         spark.conf.get("watchtower.autoloader.retentionDuration") or "30 days"
+     )
+@@ -96,6 +108,8 @@ def bronze_logs():  # type: ignore[no-untyped-def]
+     name="silver.logs",
+     table_properties={
+         "Quality": "silver",
++        # Block full refresh: it would truncate this table.
++        "pipelines.reset.allowed": "false",
+     },
+     cluster_by=["cluster_id", "log_ts"],
+ )
+diff --git a/terraform/main.tf b/terraform/main.tf
+index 1ad3c95..e6fd2ae 100644
+--- a/terraform/main.tf
++++ b/terraform/main.tf
+@@ -5,6 +5,11 @@ resource "databricks_volume" "init_scripts" {
+   name         = "init_scripts"
+   volume_type  = "MANAGED"
+   comment      = "Init scripts for Watchtower"
++
++  # No-delete policy: `terraform destroy` must not remove this volume or its files.
++  lifecycle {
++    prevent_destroy = true
++  }
+ }
+ 
+ resource "databricks_file" "init_script_configure_log4j" {
+@@ -19,4 +24,9 @@ resource "databricks_volume" "raw_log_storage" {
+   name         = "cluster_logs"
+   volume_type  = "MANAGED"
+   comment      = "Raw cluster logs for Watchtower"
++
++  # No-delete policy: `terraform destroy` must not remove this volume or its files.
++  lifecycle {
++    prevent_destroy = true
++  }
+ }

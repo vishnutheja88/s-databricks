@@ -1,0 +1,52 @@
+{
+  "title": "Hybrid Job Optimization",
+  "description": "Ask which prod jobs waste capacity or money, and why, using system tables plus Watchtower driver logs.",
+  "tables": [
+    {
+      "identifier": "${catalog}.ops.v_job_scorecard_30d",
+      "description": "One row per prod job over the last 30 days: list cost, DBUs, runs, failed runs, avg minutes, clusters per run, worker CPU/memory/swap, OOM/spill/lost-executor/error counts from logs, and one prioritized top_recommendation.",
+      "example_value_columns": ["job_name", "top_recommendation"]
+    },
+    {
+      "identifier": "${catalog}.ops.job_daily_history",
+      "description": "Append-only daily snapshot per job (snapshot_date): cost, utilization, log signals and run health. Use for trends and before/after comparisons of a change.",
+      "example_value_columns": ["job_name"]
+    },
+    {
+      "identifier": "${catalog}.ops.v_job_log_signals_daily",
+      "description": "Per job per day: oom_events, spill_events, lost_executor_events, error_lines and runs_with_logs, parsed from driver logs by Watchtower.",
+      "example_value_columns": []
+    },
+    {
+      "identifier": "${catalog}.ops.v_job_utilization_daily",
+      "description": "Per job per day: worker-node avg_cpu, p95_cpu, avg_mem, max_swap (percent) and number of clusters.",
+      "example_value_columns": []
+    },
+    {
+      "identifier": "${catalog}.silver.logs",
+      "description": "Parsed driver log lines from Watchtower: cluster_id, log_source (stdout/stderr/log4j), log_level, log_ts, log_msg. Join to ops.v_job_cluster_map on cluster_id to get job_id and job_run_id.",
+      "example_value_columns": ["log_source", "log_level"]
+    },
+    {
+      "identifier": "${catalog}.ops.v_job_cluster_map",
+      "description": "Maps cluster_id to job_id and job_run_id (last 90 days).",
+      "example_value_columns": []
+    }
+  ],
+  "instructions": [
+    "All data is from the prod workspace. Costs are list price in USD, not the negotiated rate.",
+    "CPU and memory are worker-node percentages. p95_cpu below 40 with avg_mem below 50 means oversized.",
+    "oom_events, spill_events and lost_executor_events come from driver logs parsed by Watchtower.",
+    "Show job_name, not job_id, in answers. 'Last month' means the last 30 days.",
+    "For trends over time, or comparing before and after a change, use job_daily_history.",
+    "To show log lines for a job, join silver.logs to ops.v_job_cluster_map on cluster_id and filter by job name via v_job_scorecard_30d."
+  ],
+  "sample_questions": [
+    "Which 10 jobs cost the most in the last 30 days, and what is the top recommendation for each?",
+    "Which jobs had out-of-memory events last week?",
+    "List oversized jobs ordered by cost.",
+    "Which jobs start more than one cluster per run?",
+    "Show daily cost and average runtime for the most expensive job over the last 90 days.",
+    "Show the last 50 ERROR log lines for the most expensive failing job."
+  ]
+}
